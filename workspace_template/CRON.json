@@ -1,0 +1,34 @@
+{
+  "jobs": [
+    {
+      "id": "morning-briefing",
+      "name": "Morning Briefing",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 9 * * *",
+        "tz": "Local"
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "Check today's calendar, weather forecast, and any pending reminders. Give a brief morning summary."
+      },
+      "delete_after_run": false
+    },
+    {
+      "id": "weekly-review",
+      "name": "Weekly Review",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 18 * * 5",
+        "tz": "Local"
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "Review the week's activities and summarize key accomplishments. Note any pending items for next week."
+      },
+      "delete_after_run": false
+    }
+  ]
+}
