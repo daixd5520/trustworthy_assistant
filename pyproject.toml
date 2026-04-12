@@ -43,4 +43,4 @@ trustworthy-cli = "trustworthy_assistant.cli:run"
 trustworthy-wecom = "trustworthy_assistant.run_wecom_bot:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["trustworthy_assistant"]
+packages = ["src/trustworthy_assistant"]

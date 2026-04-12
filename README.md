@@ -36,33 +36,39 @@
 
 ## 🏗️ Architecture
 
-```
+```text
 trustworthy_assistant/
-├── channels/                  # Multi-channel support
-│   └── wecom.py              # WeCom (Enterprise WeChat) integration
-├── memory/                    # Trustworthy Memory System
-│   ├── models.py             # Memory data models
-│   ├── repository.py         # Memory persistence (ledger)
-│   ├── retriever.py          # Keyword/hybrid search
-│   ├── vector_store.py       # Vector embeddings + ChromaDB
-│   ├── projector.py          # Memory projection to Markdown
-│   └── service.py            # Main memory service
-├── runtime/                   # Core runtime
-│   ├── agents.py             # Agent registry & profiles
-│   ├── sessions.py           # Session management
-│   ├── turns.py              # Turn processor (with streaming!)
-│   └── maintenance.py        # Maintenance service
-├── supervisor/                # Supervisor workflow
-│   ├── models.py             # Data models
-│   ├── policies.py           # Review policies
-│   ├── reviewer.py           # Rule-based reviewer
-│   ├── gates.py              # Verification gates
-│   └── workflow.py           # Plan-execute-review-verify
-├── providers/                 # LLM provider utilities
-│   └── normalization.py      # Response normalization
-├── eval/                      # Evaluation & benchmarks
-│   ├── benchmarks.py         # Benchmark suite
-│   └── replay.py             # Replay harness
+├── src/
+│   └── trustworthy_assistant/ # Python package
+│       ├── channels/          # Multi-channel support
+│       │   └── wecom.py       # WeCom (Enterprise WeChat) integration
+│       ├── memory/            # Trustworthy Memory System
+│       │   ├── models.py      # Memory data models
+│       │   ├── repository.py  # Memory persistence (ledger)
+│       │   ├── retriever.py   # Keyword/hybrid search
+│       │   ├── vector_store.py # Vector embeddings + ChromaDB
+│       │   ├── projector.py   # Memory projection to Markdown
+│       │   └── service.py     # Main memory service
+│       ├── runtime/           # Core runtime
+│       │   ├── agents.py      # Agent registry & profiles
+│       │   ├── sessions.py    # Session management
+│       │   ├── turns.py       # Turn processor (with streaming!)
+│       │   └── maintenance.py # Maintenance service
+│       ├── supervisor/        # Supervisor workflow
+│       │   ├── models.py      # Data models
+│       │   ├── policies.py    # Review policies
+│       │   ├── reviewer.py    # Rule-based reviewer
+│       │   ├── gates.py       # Verification gates
+│       │   └── workflow.py    # Plan-execute-review-verify
+│       ├── providers/         # LLM provider utilities
+│       │   └── normalization.py # Response normalization
+│       ├── eval/              # Evaluation & benchmarks
+│       │   ├── benchmarks.py  # Benchmark suite
+│       │   └── replay.py      # Replay harness
+│       ├── app.py             # Application factory
+│       ├── cli.py             # CLI interface
+│       ├── config.py          # Configuration management
+│       └── run_wecom_bot.py   # WeCom bot entrypoint
 ├── workspace_template/        # Workspace template
 │   ├── SOUL.md
 │   ├── IDENTITY.md
@@ -76,30 +82,20 @@ trustworthy_assistant/
 │   └── skills/
 │       └── example-skill/
 │           └── SKILL.md
-├── app.py                     # Application factory
-├── cli.py                     # CLI interface
-├── config.py                  # Configuration management
-├── bootstrap.py               # Bootstrap file loader
-├── prompting.py               # Prompt builder
-├── skills.py                  # Skills catalog
-├── tools.py                   # Tool registry
-└── run_wecom_bot.py          # WeCom bot startup script
+├── pyproject.toml             # Packaging config
+├── README.md                  # Project documentation
+└── .env.example               # Environment template
 ```
 
 ---
 
 ## 📦 Installation
 
-### From PyPI (coming soon)
-```bash
-pip install trustworthy-assistant
-```
-
 ### From Source
 ```bash
 git clone <your-repo-url>
 cd trustworthy_assistant
-pip install -e .
+python -m pip install -e .
 ```
 
 ### Prerequisites
@@ -150,6 +146,7 @@ trustworthy-cli
 # or
 python -m trustworthy_assistant.cli
 ```
+Run this from the repository root after `python -m pip install -e .`.
 
 ### 4. Run WeCom Bot
 ```bash
@@ -164,22 +161,30 @@ Then configure your WeCom webhook URL: `http://your-domain:8000/wecom/webhook`
 
 ## 📚 CLI Commands
 
-```
-You > /memory stats        # Show memory statistics
+```text
+You > /memory stats         # Show memory statistics
 You > /memory list          # List stored memories
 You > /memory candidates   # List candidate memories
+You > /memory trace        # Show last retrieval trace
 You > /memory conflicts    # List memory conflicts
 You > /memory confirm <id>  # Confirm a candidate memory
 You > /memory reject <id>   # Reject a candidate memory
+You > /memory forget <id>   # Forget a memory
 You > /memory show <id>     # Show memory details
+You > /memory sync         # Sync MEMORY.md projection
 You > /search <query>       # Search memories
 You > /prompt              # Show full system prompt
+You > /bootstrap           # Show loaded bootstrap files
 You > /agents              # List available agents
 You > /switch <agent_id>   # Switch to another agent
+You > /sessions            # List persisted sessions
+You > /maintain            # Run maintenance once
 You > /skills              # List discovered skills
 You > /benchmarks          # Run benchmark suite
 You > /supervisor          # Show supervisor status
-You > /workflow           # Show workflow report
+You > /review              # Show last review findings
+You > /verify              # Run verification gates
+You > /workflow            # Show workflow report
 You > exit                 # Exit the REPL
 ```
 

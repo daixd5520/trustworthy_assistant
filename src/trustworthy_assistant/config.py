@@ -40,7 +40,8 @@ class AppConfig:
 
 
 def load_config(root_dir: Path | None = None) -> AppConfig:
-    root = root_dir or Path(__file__).resolve().parents[1]
+    # In the packaged layout, this file lives under src/trustworthy_assistant/.
+    root = root_dir or Path(__file__).resolve().parents[2]
     load_dotenv(root / ".env", override=True)
     return AppConfig(
         root_dir=root,
