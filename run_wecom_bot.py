@@ -3,7 +3,10 @@ import sys
 import uvicorn
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+# Add parent directory to path so we can import trustworthy_assistant
+parent_dir = str(Path(__file__).parent.parent)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
 from trustworthy_assistant.app import build_app
 from trustworthy_assistant.channels.wecom import create_wecom_app
