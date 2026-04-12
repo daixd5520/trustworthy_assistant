@@ -93,27 +93,27 @@ trustworthy_assistant/
 
 ```mermaid
 flowchart TD
-    A[User Input or Channel Message] --> B[CLI / Channel Adapter]
-    B --> C[build_app()]
-    C --> D[Load Bootstrap + Skills + Memory Context]
-    D --> E[Supervisor: Plan / Task Intent]
-    E --> F[TurnProcessor]
-    F --> G[Model Inference]
-    G --> H{Tool Call?}
-    H -- Yes --> I[ToolRegistry Dispatch]
-    I --> J[Tool Result]
+    A["User Input or Channel Message"] --> B["CLI or Channel Adapter"]
+    B --> C["Build App"]
+    C --> D["Load Bootstrap Skills and Memory Context"]
+    D --> E["Supervisor Plan and Task Intent"]
+    E --> F["TurnProcessor"]
+    F --> G["Model Inference"]
+    G --> H{"Tool Call Needed"}
+    H -- Yes --> I["ToolRegistry Dispatch"]
+    I --> J["Tool Result"]
     J --> F
-    H -- No --> K[Draft Response]
-    K --> L[Supervisor: Review]
-    L --> M{Pass Review?}
-    M -- No --> N[Revise / Retry / Gate Feedback]
+    H -- No --> K["Draft Response"]
+    K --> L["Supervisor Review"]
+    L --> M{"Pass Review"}
+    M -- No --> N["Revise Retry or Gate Feedback"]
     N --> F
-    M -- Yes --> O[Supervisor: Verify Gates]
-    O --> P{Approved?}
-    P -- No --> Q[Flag Issues / Needs Revision]
+    M -- Yes --> O["Supervisor Verify Gates"]
+    O --> P{"Approved"}
+    P -- No --> Q["Flag Issues or Needs Revision"]
     Q --> F
-    P -- Yes --> R[Stream / Return Final Response]
-    R --> S[Persist Session + Memory Ledger]
+    P -- Yes --> R["Stream or Return Final Response"]
+    R --> S["Persist Session and Memory Ledger"]
 ```
 
 The `supervisor` layer acts in three places:

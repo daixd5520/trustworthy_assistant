@@ -82,27 +82,27 @@ trustworthy_assistant/
 
 ```mermaid
 flowchart TD
-    A[用户输入或渠道消息] --> B[CLI / 渠道适配层]
-    B --> C[build_app()]
-    C --> D[加载 Bootstrap、Skills、Memory Context]
-    D --> E[Supervisor: 任务规划 / 意图建模]
-    E --> F[TurnProcessor]
-    F --> G[模型推理]
-    G --> H{是否需要调用工具?}
-    H -- 是 --> I[ToolRegistry 分发工具]
-    I --> J[工具结果]
+    A["用户输入或渠道消息"] --> B["CLI 或渠道适配层"]
+    B --> C["构建应用"]
+    C --> D["加载 Bootstrap Skills 和 Memory Context"]
+    D --> E["Supervisor 任务规划与意图建模"]
+    E --> F["TurnProcessor"]
+    F --> G["模型推理"]
+    G --> H{"是否需要调用工具"}
+    H -- 是 --> I["ToolRegistry 分发工具"]
+    I --> J["工具结果"]
     J --> F
-    H -- 否 --> K[生成候选回复]
-    K --> L[Supervisor: Review]
-    L --> M{Review 是否通过?}
-    M -- 否 --> N[修正 / 重试 / 返回审查意见]
+    H -- 否 --> K["生成候选回复"]
+    K --> L["Supervisor Review"]
+    L --> M{"Review 是否通过"}
+    M -- 否 --> N["修正 重试 或返回审查意见"]
     N --> F
-    M -- 是 --> O[Supervisor: Verify Gates]
-    O --> P{是否批准输出?}
-    P -- 否 --> Q[标记问题 / 需要修改]
+    M -- 是 --> O["Supervisor Verify Gates"]
+    O --> P{"是否批准输出"}
+    P -- 否 --> Q["标记问题或要求修改"]
     Q --> F
-    P -- 是 --> R[流式输出或返回最终回复]
-    R --> S[持久化 Session 与 Memory Ledger]
+    P -- 是 --> R["流式输出或返回最终回复"]
+    R --> S["持久化 Session 与 Memory Ledger"]
 ```
 
 `supervisor` 主要在三个阶段起作用：
