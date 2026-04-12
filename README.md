@@ -89,6 +89,38 @@ trustworthy_assistant/
 └── .env.example               # Environment template
 ```
 
+### Execution Flow
+
+```mermaid
+flowchart TD
+    A[User Input or Channel Message] --> B[CLI / Channel Adapter]
+    B --> C[build_app()]
+    C --> D[Load Bootstrap + Skills + Memory Context]
+    D --> E[Supervisor: Plan / Task Intent]
+    E --> F[TurnProcessor]
+    F --> G[Model Inference]
+    G --> H{Tool Call?}
+    H -- Yes --> I[ToolRegistry Dispatch]
+    I --> J[Tool Result]
+    J --> F
+    H -- No --> K[Draft Response]
+    K --> L[Supervisor: Review]
+    L --> M{Pass Review?}
+    M -- No --> N[Revise / Retry / Gate Feedback]
+    N --> F
+    M -- Yes --> O[Supervisor: Verify Gates]
+    O --> P{Approved?}
+    P -- No --> Q[Flag Issues / Needs Revision]
+    Q --> F
+    P -- Yes --> R[Stream / Return Final Response]
+    R --> S[Persist Session + Memory Ledger]
+```
+
+The `supervisor` layer acts in three places:
+- Before execution: shapes the task intent and workflow state
+- After drafting: reviews the output for findings and policy issues
+- Before final return: runs verification gates to approve or request revision
+
 ---
 
 ## 📦 Installation
