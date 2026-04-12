@@ -9,9 +9,6 @@ description = "Production-ready AI Agent Gateway with Memory, Streaming, and Mul
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
-authors = [
-    { name = "shareAI-lab" }
-]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",

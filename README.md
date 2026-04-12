@@ -4,7 +4,6 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![PyPI version](https://img.shields.io/pypi/v/trustworthy-assistant.svg)](https://pypi.org/project/trustworthy-assistant/)
 
 **Production-ready AI Agent Gateway with Memory, Streaming, and Multi-Channel Support**
 
@@ -98,8 +97,8 @@ pip install trustworthy-assistant
 
 ### From Source
 ```bash
-git clone https://github.com/shareAI-lab/claw0.git
-cd claw0/trustworthy_assistant
+git clone <your-repo-url>
+cd trustworthy_assistant
 pip install -e .
 ```
 
@@ -262,42 +261,14 @@ Please make sure to update tests as appropriate.
 
 ---
 
-## 📖 Related Projects
-
-- **[claw0](https://github.com/shareAI-lab/claw0)** - The parent teaching repository with 10 progressive sections
-- **[learn-claude-code](https://github.com/shareAI-lab/learn-claude-code)** - A companion teaching repo that builds an agent framework from scratch
-
----
-
-## 💬 Community
-
-<div align="center">
-  <img width="260" src="https://github.com/user-attachments/assets/fe8b852b-97da-4061-a467-9694906b5edf" alt="WeChat QR Code" /><br>
-  <br>
-  Scan with WeChat to follow us, or follow on X:
-  <br>
-  <a href="https://x.com/baicai003">
-    <img src="https://img.shields.io/twitter/follow/baicai003?style=social" alt="X (formerly Twitter) Follow" />
-  </a>
-</div>
-
----
-
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
 
-## 🙏 Acknowledgments
-
-- Thanks to all contributors who have helped shape this project
-- Inspired by production-grade agent systems and the open-source AI community
-
----
-
 <div align="center">
-  <b>Made with ❤️ by shareAI-lab</b>
+  <b>Made with ❤️</b>
   <br>
   <br>
   If you find this project useful, please consider giving it a ⭐️!
