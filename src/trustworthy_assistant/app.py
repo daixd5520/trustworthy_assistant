@@ -65,7 +65,20 @@ def build_app(root_dir=None, on_tool=None, on_cron_event=None) -> TrustworthyAss
         if cs is not None:
             cs.add_dynamic_job(job_id, message, delay_minutes, channel=channel, sender_id=sender_id)
 
-    tools = ToolRegistry(memory_service, on_tool=on_tool, reminder_callback=_reminder_callback)
+    tools = ToolRegistry(
+        memory_service,
+        on_tool=on_tool,
+        reminder_callback=_reminder_callback,
+        anthropic_client=client,
+        anthropic_api_key=config.anthropic_api_key,
+        anthropic_base_url=config.anthropic_base_url,
+        model_id=config.model_id,
+        vision_api_key=config.vision_api_key,
+        vision_base_url=config.vision_base_url,
+        vision_model_id=config.vision_model_id,
+        supervisor_workflow=supervisor_workflow,
+        state_dir=config.root_dir / ".trustworthy_state",
+    )
 
     turn_processor = TurnProcessor(
         client=client,

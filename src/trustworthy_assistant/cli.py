@@ -77,6 +77,11 @@ def build_memory_context(memory_service, user_message: str) -> str:
 
 
 def handle_runtime_command(app, command: str, arg: str, current_agent_id: str) -> tuple[bool, str]:
+    current_session_key = app.session_manager.build_session_key(
+        agent_id=current_agent_id,
+        channel="terminal",
+        user_id="local",
+    )
     if command == "/agents":
         print_section("Agent Profiles")
         for profile in app.agent_registry.list_profiles():
@@ -104,6 +109,37 @@ def handle_runtime_command(app, command: str, arg: str, current_agent_id: str) -
         for row in rows:
             print(f"  {BLUE}{row['session_key']}{RESET}")
             print(f"    agent={row['agent_id']} messages={row['message_count']} last_active={row['last_active_at']}")
+        return True, current_agent_id
+    if command in {"/yes", "/always", "/no"}:
+        print_section("Command Approval")
+        if command == "/yes":
+            result = app.tools.approve_pending_command(current_session_key, remember=False)
+            print(result)
+            return True, current_agent_id
+        if command == "/always":
+            result = app.tools.approve_pending_command(current_session_key, remember=True)
+            print(result)
+            return True, current_agent_id
+        result = app.tools.reject_pending_command(current_session_key)
+        print(result)
+        return True, current_agent_id
+    if command == "/approvals":
+        print_section("Command Approvals")
+        pending = app.tools.get_pending_command(current_session_key)
+        prefixes = app.tools.list_approved_command_prefixes(current_session_key)
+        if pending is None:
+            print(f"{DIM}pending: (none){RESET}")
+        else:
+            print(f"  pending command: {pending.command}")
+            print(f"  risk: {pending.risk}")
+            print(f"  cwd: {pending.cwd}")
+            print(f"  requested_at: {pending.created_at}")
+        if prefixes:
+            print("  remembered prefixes:")
+            for prefix in prefixes:
+                print(f"    - {prefix}")
+        else:
+            print(f"{DIM}remembered prefixes: (none){RESET}")
         return True, current_agent_id
     if command == "/maintain":
         print_section("Maintenance")
@@ -364,6 +400,7 @@ def run() -> None:
     print_info(f"  Workspace: {app.config.workspace_dir}")
     print_info(f"  Cron jobs loaded: {len(app.cron_scheduler.list_jobs())}")
     print_info("  命令: /skills /memory /search /prompt /bootstrap /agents /switch /sessions /maintain /cron /benchmarks")
+    print_info("  审批: /yes /always /no /approvals")
     print_info("  supervisor: /supervisor /review /verify /workflow")
     print_info("  memory 子命令: stats list candidates trace conflicts show confirm reject forget sync")
     print_info("=" * 64)

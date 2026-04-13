@@ -1,0 +1,20 @@
+{
+  "pending_command_approvals": {},
+  "approved_command_prefixes": {
+    "agent:main:wechat:o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat": [
+      [
+        "mkdir"
+      ],
+      [
+        "touch"
+      ],
+      [
+        "python3",
+        "/users/bytedance/downloads/extract_pdf.py"
+      ],
+      [
+        "file"
+      ]
+    ]
+  }
+}

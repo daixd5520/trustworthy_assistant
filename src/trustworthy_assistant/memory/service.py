@@ -39,6 +39,22 @@ class TrustworthyMemoryService:
         return datetime.now(timezone.utc).isoformat()
 
     @staticmethod
+    def local_day_key() -> str:
+        return datetime.now().astimezone().strftime("%Y-%m-%d")
+
+    @staticmethod
+    def local_time_label(ts: str) -> str:
+        if not ts:
+            return ""
+        try:
+            parsed = datetime.fromisoformat(ts)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone().strftime("%H:%M")
+        except Exception:
+            return ""
+
+    @staticmethod
     def dedupe(items: list[str]) -> list[str]:
         seen: set[str] = set()
         ordered: list[str] = []
@@ -95,6 +111,27 @@ class TrustworthyMemoryService:
         if len(text) <= limit:
             return text
         return text[:limit] + "..."
+
+    def summarize_turn(
+        self,
+        user_input: str,
+        assistant_text: str,
+        *,
+        tool_roundtrips: int = 0,
+        errors: list[str] | None = None,
+    ) -> str:
+        user_summary = self.summary_for(user_input or "", limit=90)
+        assistant_summary = self.summary_for(assistant_text or "", limit=180)
+        parts: list[str] = []
+        if user_summary:
+            parts.append(f"用户请求：{user_summary}")
+        if assistant_summary:
+            parts.append(f"助手回复：{assistant_summary}")
+        if tool_roundtrips:
+            parts.append(f"中间进行了 {tool_roundtrips} 轮检查或工具操作")
+        if errors:
+            parts.append(f"处理结果含报错：{self.summary_for('; '.join(errors), limit=120)}")
+        return "；".join(parts)
 
     def value_for(self, slot: str, content: str) -> str:
         lowered = content.lower()
@@ -296,6 +333,7 @@ class TrustworthyMemoryService:
     def write_memory(self, content: str, category: str = "general") -> str:
         payload = {
             "ts": self.now_iso(),
+            "local_date": self.local_day_key(),
             "category": category,
             "content": content,
         }
@@ -318,6 +356,102 @@ class TrustworthyMemoryService:
     def load_evergreen(self) -> str:
         return self.repository.read_markdown().strip()
 
+    def append_conversation_digest(
+        self,
+        *,
+        user_input: str,
+        assistant_text: str,
+        channel: str,
+        user_id: str,
+        session_key: str,
+        agent_id: str,
+        tool_roundtrips: int = 0,
+        errors: list[str] | None = None,
+    ) -> None:
+        payload = {
+            "ts": self.now_iso(),
+            "local_date": self.local_day_key(),
+            "kind": "conversation_digest",
+            "channel": channel,
+            "user_id": user_id,
+            "session_key": session_key,
+            "agent_id": agent_id,
+            "user_text": self.summary_for(user_input or "", limit=240),
+            "assistant_text": self.summary_for(assistant_text or "", limit=320),
+            "tool_roundtrips": int(tool_roundtrips or 0),
+            "error_count": len(errors or []),
+            "summary": self.summarize_turn(
+                user_input,
+                assistant_text,
+                tool_roundtrips=tool_roundtrips,
+                errors=errors or [],
+            ),
+        }
+        self.repository.append_daily_entry(payload)
+
+    def load_daily_digests(
+        self,
+        *,
+        local_date: str = "",
+        channel: str = "",
+        user_id: str = "",
+        agent_id: str = "",
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        target_date = local_date or self.local_day_key()
+        rows: list[dict[str, Any]] = []
+        for entry in self.repository.load_daily_entries():
+            if entry.get("kind") != "conversation_digest":
+                continue
+            if entry.get("local_date") != target_date:
+                continue
+            if channel and entry.get("channel") != channel:
+                continue
+            if user_id and entry.get("user_id") != user_id:
+                continue
+            if agent_id and entry.get("agent_id") != agent_id:
+                continue
+            rows.append(entry)
+        rows.sort(key=lambda item: str(item.get("ts") or ""))
+        if limit > 0:
+            rows = rows[-limit:]
+        return rows
+
+    def format_daily_digest_context(
+        self,
+        *,
+        channel: str = "",
+        user_id: str = "",
+        agent_id: str = "",
+        local_date: str = "",
+        limit: int = 10,
+        max_chars: int = 1600,
+    ) -> str:
+        rows = self.load_daily_digests(
+            local_date=local_date,
+            channel=channel,
+            user_id=user_id,
+            agent_id=agent_id,
+            limit=limit,
+        )
+        if not rows:
+            return ""
+        lines: list[str] = []
+        total_chars = 0
+        for row in rows:
+            label = self.local_time_label(str(row.get("ts") or ""))
+            prefix = f"- {label} " if label else "- "
+            body = str(row.get("summary") or "").strip()
+            if not body:
+                continue
+            line = prefix + body
+            projected = total_chars + len(line) + 1
+            if lines and projected > max_chars:
+                break
+            lines.append(line)
+            total_chars = projected
+        return "\n".join(lines)
+
     def raw_chunks(self) -> list[dict[str, Any]]:
         chunks: list[dict[str, Any]] = []
         evergreen = self.load_evergreen()
@@ -327,6 +461,13 @@ class TrustworthyMemoryService:
                 if paragraph:
                     chunks.append({"path": "MEMORY.md", "text": paragraph})
         for entry in self.repository.load_daily_entries():
+            if entry.get("kind") == "conversation_digest":
+                text = entry.get("summary", "")
+                if not text:
+                    continue
+                label = f"{entry.get('local_date') or entry['_path']} [digest]"
+                chunks.append({"path": label, "text": text})
+                continue
             text = entry.get("content", "")
             if not text:
                 continue

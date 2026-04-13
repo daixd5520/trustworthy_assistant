@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Generator
+import re
+from typing import Callable, Optional
 
 from trustworthy_assistant.providers.normalization import normalize_response
 from trustworthy_assistant.runtime.agents import AgentProfile
@@ -17,6 +18,130 @@ class TurnResult:
     raw_stop_reason: str = ""
     provider_trace: str = ""
     errors: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ProgressTracker:
+    user_input: str
+    current_phase: str = "idle"
+    emitted_phases: set[str] = field(default_factory=set)
+    last_note: str = ""
+    emitted_count: int = 0
+    max_updates: int = 2
+
+    def next_note(self, normalized, tool_roundtrips: int) -> str:
+        if self.emitted_count >= self.max_updates:
+            return ""
+        explicit = self._compact_text("".join(block.text for block in normalized.texts).strip())
+        if explicit and explicit != self.last_note:
+            self.last_note = explicit
+            self.emitted_count += 1
+            return explicit
+        if not normalized.tool_calls:
+            return ""
+        phase = self._infer_phase([call.name for call in normalized.tool_calls], tool_roundtrips)
+        if not phase:
+            return ""
+        if not self._should_announce(phase):
+            return ""
+        note = self._compose_note(phase, tool_roundtrips=tool_roundtrips)
+        if note:
+            self.current_phase = phase
+            self.emitted_phases.add(phase)
+            self.last_note = note
+            self.emitted_count += 1
+        return note
+
+    @staticmethod
+    def _compact_text(text: str, limit: int = 72) -> str:
+        if not text:
+            return ""
+        first = text.split("\n\n", 1)[0].strip()
+        if len(first) <= limit:
+            return first
+        return first[:limit].rstrip() + "..."
+
+    @staticmethod
+    def _phase_rank(phase: str) -> int:
+        return {
+            "idle": 0,
+            "orient": 1,
+            "inspect": 2,
+            "verify": 3,
+            "act": 4,
+        }.get(phase, 0)
+
+    def _infer_phase(self, tool_names: list[str], tool_roundtrips: int) -> str:
+        names = set(tool_names)
+        if "send_file" in names:
+            return "act"
+        if "set_reminder" in names:
+            return "act"
+        if "run_command" in names:
+            return "verify"
+        if "read_file" in names:
+            return "inspect"
+        if "list_directory" in names or "memory_search" in names or "get_current_time" in names:
+            return "orient" if tool_roundtrips == 0 else "inspect"
+        return "orient" if tool_roundtrips == 0 else ""
+
+    def _should_announce(self, phase: str) -> bool:
+        if phase in self.emitted_phases:
+            return False
+        # Only announce when moving the task forward, not when bouncing sideways.
+        return self._phase_rank(phase) > self._phase_rank(self.current_phase)
+
+    def _subject_hint(self) -> str:
+        text = (self.user_input or "").strip()
+        path_match = re.search(r"(`[^`]+`|/[^\s]+|[A-Za-z0-9_./-]+\.[A-Za-z0-9]+)", text)
+        if path_match:
+            return path_match.group(1).strip("`")
+        hint_map = [
+            ("目录", "目录结构"),
+            ("文件", "文件内容"),
+            ("代码", "这段代码"),
+            ("配置", "配置"),
+            ("报错", "报错原因"),
+            ("问题", "这个问题"),
+            ("总结", "今天的记录"),
+        ]
+        for keyword, hint in hint_map:
+            if keyword in text:
+                return hint
+        return ""
+
+    def _compose_note(self, stage: str, tool_roundtrips: int) -> str:
+        subject = self._subject_hint()
+        idx = len(self.emitted_phases)
+        if stage == "orient":
+            options = [
+                f"我先把{subject}的脉络捋一下。" if subject else "我先把来龙去脉捋一下。",
+                f"我先找一下{subject}的入口。" if subject else "我先找一下入口。",
+                f"我先对一下{subject}周围的上下文。" if subject else "我先对一下相关上下文。",
+            ]
+            return options[idx % len(options)]
+        if stage == "inspect":
+            options = [
+                f"我先看下{subject}里具体写了什么。" if subject else "我先看下具体内容。",
+                f"我先把{subject}细读一下。" if subject else "我先细看一下相关实现。",
+                f"我先对一下{subject}的细节。" if subject else "我先对一下里面的细节。",
+            ]
+            return options[idx % len(options)]
+        if stage == "verify":
+            options = [
+                "我先跑一下验证，看看实际情况。",
+                f"我先验证一下{subject}。" if subject else "我先做个快速验证。",
+                "我先看下运行结果再判断。",
+            ]
+            return options[idx % len(options)]
+        if stage == "act":
+            options = [
+                "我整理一下，马上给你。",
+                "我这边收个尾，马上发你。",
+                "我先把结果落一下，然后给你。",
+            ]
+            return options[idx % len(options)]
+        return ""
 
 
 class TurnProcessor:
@@ -49,19 +174,63 @@ class TurnProcessor:
             for item in results
         )
 
-    def process_turn(self, user_input: str, agent: AgentProfile, channel: str = "terminal", user_id: str = "local") -> TurnResult:
-        self.tool_registry.set_channel_context(channel, user_id)
+    def build_daily_digest_context(self, channel: str, user_id: str, agent_id: str) -> str:
+        if channel == "cron":
+            return self.memory_service.format_daily_digest_context(agent_id=agent_id)
+        return self.memory_service.format_daily_digest_context(
+            channel=channel,
+            user_id=user_id,
+            agent_id=agent_id,
+        )
+
+    def _record_turn_digest(
+        self,
+        *,
+        user_input: str,
+        assistant_text: str,
+        channel: str,
+        user_id: str,
+        session_key: str,
+        agent_id: str,
+        tool_roundtrips: int,
+        errors: list[str],
+    ) -> None:
+        try:
+            self.memory_service.append_conversation_digest(
+                user_input=user_input,
+                assistant_text=assistant_text,
+                channel=channel,
+                user_id=user_id,
+                session_key=session_key,
+                agent_id=agent_id,
+                tool_roundtrips=tool_roundtrips,
+                errors=errors,
+            )
+        except Exception:
+            pass
+
+    def process_turn(
+        self,
+        user_input: str,
+        agent: AgentProfile,
+        channel: str = "terminal",
+        user_id: str = "local",
+        on_progress: Optional[Callable[[str], None]] = None,
+    ) -> TurnResult:
+        session = self.session_manager.get_or_create(agent.agent_id, channel=channel, user_id=user_id)
+        self.tool_registry.set_channel_context(channel, user_id, user_input, session.session_key)
         bootstrap_data = self.bootstrap_loader.load_all(mode=agent.prompt_mode)
         self.skills_catalog.discover()
         skills_block = self.skills_catalog.format_prompt_block()
-        session = self.session_manager.get_or_create(agent.agent_id, channel=channel, user_id=user_id)
         self.memory_service.ingest_user_message(user_input, session_key=session.session_key)
         memory_context = self.build_memory_context(user_input)
+        daily_digest_context = self.build_daily_digest_context(channel, user_id, agent.agent_id)
         system_prompt = self.prompt_builder.build(
             bootstrap=bootstrap_data,
             skills_block=skills_block,
             registered_tools_block=self.tool_registry.format_prompt_block(),
             memory_context=memory_context,
+            daily_digest_context=daily_digest_context,
             mode=agent.prompt_mode,
             agent_id=agent.agent_id,
             channel=channel,
@@ -69,6 +238,7 @@ class TurnProcessor:
         self.session_manager.append(session.session_key, "user", user_input)
         tool_roundtrips = 0
         errors: list[str] = []
+        progress_tracker = ProgressTracker(user_input)
         while True:
             try:
                 response = self.client.messages.create(
@@ -80,7 +250,7 @@ class TurnProcessor:
                 )
             except Exception as exc:
                 errors.append(str(exc))
-                return TurnResult(
+                result = TurnResult(
                     agent_id=agent.agent_id,
                     session_key=session.session_key,
                     assistant_text="",
@@ -91,12 +261,30 @@ class TurnProcessor:
                     provider_trace="request_failed",
                     errors=errors,
                 )
+                self._record_turn_digest(
+                    user_input=user_input,
+                    assistant_text="",
+                    channel=channel,
+                    user_id=user_id,
+                    session_key=session.session_key,
+                    agent_id=agent.agent_id,
+                    tool_roundtrips=tool_roundtrips,
+                    errors=errors,
+                )
+                return result
             normalized = normalize_response(response)
             provider_trace = normalized.raw_summary
             self.session_manager.append(session.session_key, "assistant", response.content)
+            if normalized.tool_calls:
+                progress_text = progress_tracker.next_note(normalized, tool_roundtrips)
+                if progress_text and on_progress is not None:
+                    try:
+                        on_progress(progress_text)
+                    except Exception:
+                        pass
             if normalized.stop_reason == "end_turn" and not normalized.tool_calls:
                 assistant_text = "".join(block.text for block in normalized.texts)
-                return TurnResult(
+                result = TurnResult(
                     agent_id=agent.agent_id,
                     session_key=session.session_key,
                     assistant_text=assistant_text,
@@ -106,6 +294,17 @@ class TurnProcessor:
                     raw_stop_reason=normalized.stop_reason,
                     provider_trace=provider_trace,
                 )
+                self._record_turn_digest(
+                    user_input=user_input,
+                    assistant_text=assistant_text,
+                    channel=channel,
+                    user_id=user_id,
+                    session_key=session.session_key,
+                    agent_id=agent.agent_id,
+                    tool_roundtrips=tool_roundtrips,
+                    errors=errors,
+                )
+                return result
             if normalized.tool_calls:
                 tool_roundtrips += 1
                 tool_results = []
@@ -126,7 +325,7 @@ class TurnProcessor:
                     )
                 continue
             assistant_text = "".join(block.text for block in normalized.texts)
-            return TurnResult(
+            result = TurnResult(
                 agent_id=agent.agent_id,
                 session_key=session.session_key,
                 assistant_text=assistant_text,
@@ -136,21 +335,34 @@ class TurnProcessor:
                 raw_stop_reason=normalized.stop_reason or "",
                 provider_trace=provider_trace,
             )
+            self._record_turn_digest(
+                user_input=user_input,
+                assistant_text=assistant_text,
+                channel=channel,
+                user_id=user_id,
+                session_key=session.session_key,
+                agent_id=agent.agent_id,
+                tool_roundtrips=tool_roundtrips,
+                errors=errors,
+            )
+            return result
     
     def process_turn_stream(self, user_input: str, agent: AgentProfile, channel: str = "terminal", 
                            user_id: str = "local", on_text: Optional[Callable[[str], None]] = None) -> TurnResult:
-        self.tool_registry.set_channel_context(channel, user_id)
+        session = self.session_manager.get_or_create(agent.agent_id, channel=channel, user_id=user_id)
+        self.tool_registry.set_channel_context(channel, user_id, user_input, session.session_key)
         bootstrap_data = self.bootstrap_loader.load_all(mode=agent.prompt_mode)
         self.skills_catalog.discover()
         skills_block = self.skills_catalog.format_prompt_block()
-        session = self.session_manager.get_or_create(agent.agent_id, channel=channel, user_id=user_id)
         self.memory_service.ingest_user_message(user_input, session_key=session.session_key)
         memory_context = self.build_memory_context(user_input)
+        daily_digest_context = self.build_daily_digest_context(channel, user_id, agent.agent_id)
         system_prompt = self.prompt_builder.build(
             bootstrap=bootstrap_data,
             skills_block=skills_block,
             registered_tools_block=self.tool_registry.format_prompt_block(),
             memory_context=memory_context,
+            daily_digest_context=daily_digest_context,
             mode=agent.prompt_mode,
             agent_id=agent.agent_id,
             channel=channel,
@@ -180,7 +392,7 @@ class TurnProcessor:
                     response = stream.get_final_message()
             except Exception as exc:
                 errors.append(str(exc))
-                return TurnResult(
+                result = TurnResult(
                     agent_id=agent.agent_id,
                     session_key=session.session_key,
                     assistant_text=full_text,
@@ -191,11 +403,22 @@ class TurnProcessor:
                     provider_trace="request_failed",
                     errors=errors,
                 )
+                self._record_turn_digest(
+                    user_input=user_input,
+                    assistant_text=full_text,
+                    channel=channel,
+                    user_id=user_id,
+                    session_key=session.session_key,
+                    agent_id=agent.agent_id,
+                    tool_roundtrips=tool_roundtrips,
+                    errors=errors,
+                )
+                return result
             normalized = normalize_response(response)
             provider_trace = normalized.raw_summary
             self.session_manager.append(session.session_key, "assistant", response.content)
             if normalized.stop_reason == "end_turn" and not normalized.tool_calls:
-                return TurnResult(
+                result = TurnResult(
                     agent_id=agent.agent_id,
                     session_key=session.session_key,
                     assistant_text=full_text,
@@ -205,6 +428,17 @@ class TurnProcessor:
                     raw_stop_reason=normalized.stop_reason,
                     provider_trace=provider_trace,
                 )
+                self._record_turn_digest(
+                    user_input=user_input,
+                    assistant_text=full_text,
+                    channel=channel,
+                    user_id=user_id,
+                    session_key=session.session_key,
+                    agent_id=agent.agent_id,
+                    tool_roundtrips=tool_roundtrips,
+                    errors=errors,
+                )
+                return result
             if normalized.tool_calls:
                 tool_roundtrips += 1
                 tool_results = []
@@ -224,7 +458,7 @@ class TurnProcessor:
                         "Tool execution results:\n" + "\n\n".join(text_feedback_parts),
                     )
                 continue
-            return TurnResult(
+            result = TurnResult(
                 agent_id=agent.agent_id,
                 session_key=session.session_key,
                 assistant_text=full_text,
@@ -234,3 +468,14 @@ class TurnProcessor:
                 raw_stop_reason=normalized.stop_reason or "",
                 provider_trace=provider_trace,
             )
+            self._record_turn_digest(
+                user_input=user_input,
+                assistant_text=full_text,
+                channel=channel,
+                user_id=user_id,
+                session_key=session.session_key,
+                agent_id=agent.agent_id,
+                tool_roundtrips=tool_roundtrips,
+                errors=errors,
+            )
+            return result

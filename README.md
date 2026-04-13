@@ -300,7 +300,7 @@ trustworthy-wecom
 ### Notes
 - Uses the iLink / ClawBot HTTP bridge style API
 - Stores account state under `.wechat_personal/`
-- Currently supports text messages only
+- Supports text messages, quoted replies, and image understanding via the built-in `read_image` tool
 - Reuses the same `turn_processor` and session pipeline as the CLI
 
 ---
