@@ -47,7 +47,6 @@ def build_app(root_dir=None, on_tool=None, on_cron_event=None) -> TrustworthyAss
     config.benchmark_dir.mkdir(parents=True, exist_ok=True)
     agent_registry = AgentRegistry()
     session_manager = SessionManager()
-    tools = ToolRegistry(memory_service, on_tool=on_tool)
     client = Anthropic(api_key=config.anthropic_api_key, base_url=config.anthropic_base_url)
     bootstrap_loader = BootstrapLoader(config)
     skills_catalog = SkillsCatalog(config)
@@ -55,6 +54,19 @@ def build_app(root_dir=None, on_tool=None, on_cron_event=None) -> TrustworthyAss
     maintenance_service = MaintenanceService(memory_service)
     benchmark_suite = BenchmarkSuite()
     supervisor_workflow = SupervisorWorkflow()
+
+    _reminder_state: dict = {"counter": 0}
+    cron_scheduler_placeholder: list = [None]
+
+    def _reminder_callback(message: str, delay_minutes: int) -> None:
+        _reminder_state["counter"] += 1
+        job_id = f"reminder-{_reminder_state['counter']}"
+        cs = cron_scheduler_placeholder[0]
+        if cs is not None:
+            cs.add_dynamic_job(job_id, message, delay_minutes)
+
+    tools = ToolRegistry(memory_service, on_tool=on_tool, reminder_callback=_reminder_callback)
+
     turn_processor = TurnProcessor(
         client=client,
         prompt_builder=prompt_builder,
@@ -65,12 +77,15 @@ def build_app(root_dir=None, on_tool=None, on_cron_event=None) -> TrustworthyAss
         session_manager=session_manager,
         model_id=config.model_id,
     )
+
     cron_scheduler = CronScheduler(
         workspace_dir=config.workspace_dir,
         agent_registry=agent_registry,
         turn_processor=turn_processor,
         on_event=on_cron_event,
     )
+    cron_scheduler_placeholder[0] = cron_scheduler
+
     return TrustworthyAssistantApp(
         config=config,
         bootstrap_loader=bootstrap_loader,

@@ -5,10 +5,18 @@ from typing import Any, Callable
 from trustworthy_assistant.memory.service import TrustworthyMemoryService
 
 
+def _local_now_str() -> str:
+    now = datetime.now().astimezone()
+    offset = now.strftime("%z")
+    offset_fmt = f"UTC{offset[:3]}:{offset[3:]}" if len(offset) == 5 else offset
+    return now.strftime(f"%Y-%m-%d %H:%M {offset_fmt}")
+
+
 class ToolRegistry:
-    def __init__(self, memory_service: TrustworthyMemoryService, on_tool: Callable[[str, str], None] | None = None) -> None:
+    def __init__(self, memory_service: TrustworthyMemoryService, on_tool: Callable[[str, str], None] | None = None, reminder_callback: Callable[[str, int], None] | None = None) -> None:
         self.memory_service = memory_service
         self.on_tool = on_tool
+        self.reminder_callback = reminder_callback
         self.workspace_dir = self.memory_service.repository.paths.workspace_dir
         self.tools = [
             {
@@ -59,8 +67,20 @@ class ToolRegistry:
             },
             {
                 "name": "get_current_time",
-                "description": "Get the current UTC time.",
+                "description": "Get the current local time with timezone.",
                 "input_schema": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "set_reminder",
+                "description": "Set a one-off reminder that fires after a delay. The reminder message will be sent to you when it triggers.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string", "description": "The reminder message to send when it triggers."},
+                        "delay_minutes": {"type": "integer", "description": "Number of minutes from now to trigger the reminder."},
+                    },
+                    "required": ["message", "delay_minutes"],
+                },
             },
         ]
         self.handlers: dict[str, Callable[..., str]] = {
@@ -69,6 +89,7 @@ class ToolRegistry:
             "list_directory": self.list_directory,
             "read_file": self.read_file,
             "get_current_time": self.get_current_time,
+            "set_reminder": self.set_reminder,
         }
 
     def emit(self, name: str, detail: str) -> None:
@@ -122,8 +143,22 @@ class ToolRegistry:
         return text[:max_chars] + f"\n\n[... truncated, total {len(text)} chars ...]"
 
     def get_current_time(self) -> str:
-        self.emit("get_current_time", "utc")
-        return datetime.now(timezone.utc).isoformat()
+        self.emit("get_current_time", "local")
+        return _local_now_str()
+
+    def set_reminder(self, message: str, delay_minutes: int) -> str:
+        self.emit("set_reminder", f"{delay_minutes}m: {message[:40]}")
+        if self.reminder_callback is None:
+            return "Error: Reminders are not available in this session."
+        if delay_minutes < 1:
+            return "Error: delay_minutes must be at least 1."
+        if delay_minutes > 1440:
+            return "Error: delay_minutes must be at most 1440 (24 hours)."
+        try:
+            self.reminder_callback(message, delay_minutes)
+            return f"Reminder set: will notify you in {delay_minutes} minute(s)."
+        except Exception as exc:
+            return f"Error: Failed to set reminder: {exc}"
 
     def format_prompt_block(self) -> str:
         lines = [

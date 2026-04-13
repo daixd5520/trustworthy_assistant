@@ -107,6 +107,9 @@ class CronScheduler:
                     job._next_run_dt = self._compute_next_run(job, now)
                     job.next_run_at = job._next_run_dt.isoformat() if job._next_run_dt else ""
                 updated[job.job_id] = job
+            for jid, job in previous.items():
+                if jid.startswith("reminder-") and jid not in updated:
+                    updated[jid] = job
             self._jobs = updated
             return len(updated)
 
@@ -138,6 +141,27 @@ class CronScheduler:
             return False, f"unknown cron job: {job_id}"
         self._execute_job(job_id=job_id, scheduled_for=_now_utc(), manual=True)
         return True, f"cron job triggered: {job_id}"
+
+    def add_dynamic_job(self, job_id: str, message: str, delay_minutes: int) -> None:
+        from datetime import timedelta
+        fire_at = _now_utc() + timedelta(minutes=delay_minutes)
+        job = CronJobState(
+            job_id=job_id,
+            name=f"Reminder: {message[:30]}",
+            enabled=True,
+            expr="",
+            tz_name="UTC",
+            payload_kind="agent_turn",
+            message=f"[Reminder] {message}",
+            agent_id="",
+            delete_after_run=True,
+            raw={},
+        )
+        job._next_run_dt = fire_at
+        job.next_run_at = fire_at.isoformat()
+        with self._lock:
+            self._jobs[job_id] = job
+        self.on_event(f"reminder set: {job_id} in {delay_minutes}m")
 
     def _run_loop(self) -> None:
         while not self._stop_event.wait(self.poll_seconds):

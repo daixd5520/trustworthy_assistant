@@ -50,7 +50,7 @@ class PromptBuilder:
                 content = bootstrap.get(name, "").strip()
                 if content:
                     sections.append(f"## {name.replace('.md', '')}\n\n{content}")
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        now = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
         sections.append(
             "## Runtime Context\n\n"
             f"- Agent ID: {agent_id}\n"
