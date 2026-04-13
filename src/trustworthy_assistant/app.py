@@ -8,6 +8,7 @@ from trustworthy_assistant.eval.benchmarks import BenchmarkSuite
 from trustworthy_assistant.memory.service import TrustworthyMemoryService
 from trustworthy_assistant.prompting import PromptBuilder
 from trustworthy_assistant.runtime.agents import AgentRegistry
+from trustworthy_assistant.runtime.cron import CronScheduler
 from trustworthy_assistant.runtime.maintenance import MaintenanceService
 from trustworthy_assistant.runtime.sessions import SessionManager
 from trustworthy_assistant.runtime.turns import TurnProcessor
@@ -31,9 +32,10 @@ class TrustworthyAssistantApp:
     tools: ToolRegistry
     client: Anthropic
     supervisor_workflow: SupervisorWorkflow
+    cron_scheduler: CronScheduler
 
 
-def build_app(root_dir=None, on_tool=None) -> TrustworthyAssistantApp:
+def build_app(root_dir=None, on_tool=None, on_cron_event=None) -> TrustworthyAssistantApp:
     config = load_config(root_dir)
     memory_service = TrustworthyMemoryService(
         config.workspace_dir,
@@ -63,6 +65,12 @@ def build_app(root_dir=None, on_tool=None) -> TrustworthyAssistantApp:
         session_manager=session_manager,
         model_id=config.model_id,
     )
+    cron_scheduler = CronScheduler(
+        workspace_dir=config.workspace_dir,
+        agent_registry=agent_registry,
+        turn_processor=turn_processor,
+        on_event=on_cron_event,
+    )
     return TrustworthyAssistantApp(
         config=config,
         bootstrap_loader=bootstrap_loader,
@@ -77,4 +85,5 @@ def build_app(root_dir=None, on_tool=None) -> TrustworthyAssistantApp:
         tools=tools,
         client=client,
         supervisor_workflow=supervisor_workflow,
+        cron_scheduler=cron_scheduler,
     )

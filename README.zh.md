@@ -178,6 +178,7 @@ python -m trustworthy_assistant.cli
 ```
 
 请在仓库根目录下执行，并确保已经运行过 `python -m pip install -e .`。
+如果存在 `workspace/CRON.json`，CLI 会自动启动后台 cron 调度器。
 
 ### 4. 启动 WeCom 机器人
 
@@ -188,6 +189,7 @@ python -m trustworthy_assistant.run_wecom_bot
 ```
 
 随后将企业微信 webhook 配置到 `http://your-domain:8000/wecom/webhook`。
+WeCom 进程也会自动启动 cron 调度器。
 
 ---
 
@@ -211,6 +213,9 @@ You > /agents               # 列出 agent
 You > /switch <agent_id>    # 切换 agent
 You > /sessions             # 查看会话列表
 You > /maintain             # 执行一次维护任务
+You > /cron                 # 查看 cron 调度状态
+You > /cron reload          # 从 CRON.json 重载任务
+You > /cron run <job_id>    # 立即触发一个 cron 任务
 You > /skills               # 列出技能
 You > /benchmarks           # 运行 benchmark
 You > /supervisor           # 查看 supervisor 状态

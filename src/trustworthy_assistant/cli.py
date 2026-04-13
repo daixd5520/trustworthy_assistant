@@ -1,4 +1,11 @@
+import atexit
 import sys
+from pathlib import Path
+
+try:
+    import readline
+except ImportError:  # pragma: no cover - macOS/Linux normally provide readline
+    readline = None
 
 from trustworthy_assistant.app import build_app
 
@@ -31,6 +38,32 @@ def print_assistant(text: str) -> None:
 
 def on_tool(name: str, detail: str) -> None:
     print(f"  {DIM}[tool: {name}] {detail}{RESET}")
+
+
+def on_cron_event(message: str) -> None:
+    print(f"\n{DIM}[cron] {message}{RESET}")
+
+
+def setup_input_history(root_dir: Path) -> None:
+    if readline is None:
+        return
+    history_file = root_dir / ".trustworthy_cli_history"
+    try:
+        readline.read_history_file(history_file)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return
+    readline.set_history_length(1000)
+
+    def _save_history() -> None:
+        try:
+            history_file.parent.mkdir(parents=True, exist_ok=True)
+            readline.write_history_file(history_file)
+        except OSError:
+            pass
+
+    atexit.register(_save_history)
 
 
 def build_memory_context(memory_service, user_message: str) -> str:
@@ -78,6 +111,39 @@ def handle_runtime_command(app, command: str, arg: str, current_agent_id: str) -
         print(f"  run_at: {report.run_at}")
         print(f"  summary: {report.summary}")
         print(f"  projection: {report.projection_path}")
+        return True, current_agent_id
+    if command == "/cron":
+        subparts = arg.split(maxsplit=1) if arg else []
+        subcommand = subparts[0].lower() if subparts else "status"
+        subarg = subparts[1] if len(subparts) > 1 else ""
+        if subcommand in {"", "status", "list"}:
+            print_section("Cron Jobs")
+            rows = app.cron_scheduler.list_jobs()
+            if not rows:
+                print(f"{DIM}(未发现 cron 任务){RESET}")
+                return True, current_agent_id
+            for row in rows:
+                status_color = GREEN if row["last_status"] == "ok" else YELLOW if row["last_status"] == "error" else DIM
+                enabled = "enabled" if row["enabled"] else "disabled"
+                print(f"  {BLUE}{row['job_id']}{RESET}  {row['name']}  [{enabled}]")
+                print(f"    expr={row['expr']} tz={row['tz']} agent={row['agent_id'] or app.agent_registry.default_agent_id}")
+                print(f"    next={row['next_run_at'] or '-'}")
+                print(f"    last={row['last_run_at'] or '-'} status={status_color}{row['last_status']}{RESET}")
+                if row["last_error"]:
+                    print(f"    {DIM}error: {row['last_error']}{RESET}")
+            return True, current_agent_id
+        if subcommand == "reload":
+            count = app.cron_scheduler.reload_jobs()
+            print(f"{GREEN}cron 任务已重载: {count}{RESET}")
+            return True, current_agent_id
+        if subcommand == "run":
+            if not subarg:
+                print(f"{YELLOW}用法: /cron run <job_id>{RESET}")
+                return True, current_agent_id
+            ok, message = app.cron_scheduler.run_job_now(subarg.strip())
+            print(f"{GREEN if ok else YELLOW}{message}{RESET}")
+            return True, current_agent_id
+        print(f"{YELLOW}用法: /cron [status|reload|run <job_id>]{RESET}")
         return True, current_agent_id
     if command == "/benchmarks":
         print_section("Benchmark Suite")
@@ -279,61 +345,67 @@ def handle_repl_command(app, cmd: str, bootstrap_data: dict[str, str], skills_bl
 
 
 def run() -> None:
-    app = build_app(on_tool=on_tool)
+    app = build_app(on_tool=on_tool, on_cron_event=on_cron_event)
     if not app.config.anthropic_api_key:
         print(f"{YELLOW}错误: 未设置 ANTHROPIC_API_KEY.{RESET}")
         sys.exit(1)
     if not app.config.workspace_dir.is_dir():
         print(f"{YELLOW}错误: 未找到工作区目录: {app.config.workspace_dir}{RESET}")
         sys.exit(1)
+    setup_input_history(app.config.root_dir)
     bootstrap_data = app.bootstrap_loader.load_all(mode="full")
     app.skills_catalog.discover()
     skills_block = app.skills_catalog.format_prompt_block()
     current_agent_id = app.agent_registry.default_agent_id
+    app.cron_scheduler.start()
     print_info("=" * 64)
     print_info("  trustworthy_assistant  |  Production Memory Edition")
     print_info(f"  Model: {app.config.model_id}")
     print_info(f"  Workspace: {app.config.workspace_dir}")
-    print_info("  命令: /skills /memory /search /prompt /bootstrap /agents /switch /sessions /maintain /benchmarks")
+    print_info(f"  Cron jobs loaded: {len(app.cron_scheduler.list_jobs())}")
+    print_info("  命令: /skills /memory /search /prompt /bootstrap /agents /switch /sessions /maintain /cron /benchmarks")
     print_info("  supervisor: /supervisor /review /verify /workflow")
     print_info("  memory 子命令: stats list candidates trace conflicts show confirm reject forget sync")
     print_info("=" * 64)
-    while True:
-        try:
-            user_input = input(colored_prompt()).strip()
-        except (KeyboardInterrupt, EOFError):
-            print(f"\n{DIM}再见.{RESET}")
-            break
-        if not user_input:
-            continue
-        if user_input.lower() in {"quit", "exit"}:
-            print(f"\n{DIM}再见.{RESET}")
-            break
-        if user_input.startswith("/"):
-            parts = user_input.strip().split(maxsplit=1)
-            runtime_handled, current_agent_id = handle_runtime_command(app, parts[0].lower(), parts[1] if len(parts) > 1 else "", current_agent_id)
-            if runtime_handled:
+    try:
+        while True:
+            try:
+                user_input = input(colored_prompt()).strip()
+            except (KeyboardInterrupt, EOFError):
+                print(f"\n{DIM}再见.{RESET}")
+                break
+            if not user_input:
                 continue
-        if user_input.startswith("/") and handle_repl_command(app, user_input, bootstrap_data, skills_block):
-            continue
-        agent = app.agent_registry.get(current_agent_id)
-        
-        print(f"\n{GREEN}{BOLD}Assistant:{RESET} ", end="", flush=True)
-        accumulated_text = []
-        def on_text(text: str):
-            print(text, end="", flush=True)
-            accumulated_text.append(text)
-        
-        result = app.turn_processor.process_turn_stream(
-            user_input, agent=agent, channel="terminal", user_id="local", on_text=on_text
-        )
-        
-        if result.recalled_memory:
-            print_info("\n  [自动召回] 找到相关记忆")
-        if result.errors:
-            print(f"\n{YELLOW}API Error: {'; '.join(result.errors)}{RESET}\n")
-            continue
-        print("\n")
+            if user_input.lower() in {"quit", "exit"}:
+                print(f"\n{DIM}再见.{RESET}")
+                break
+            if user_input.startswith("/"):
+                parts = user_input.strip().split(maxsplit=1)
+                runtime_handled, current_agent_id = handle_runtime_command(app, parts[0].lower(), parts[1] if len(parts) > 1 else "", current_agent_id)
+                if runtime_handled:
+                    continue
+            if user_input.startswith("/") and handle_repl_command(app, user_input, bootstrap_data, skills_block):
+                continue
+            agent = app.agent_registry.get(current_agent_id)
+            
+            print(f"\n{GREEN}{BOLD}Assistant:{RESET} ", end="", flush=True)
+            accumulated_text = []
+            def on_text(text: str):
+                print(text, end="", flush=True)
+                accumulated_text.append(text)
+            
+            result = app.turn_processor.process_turn_stream(
+                user_input, agent=agent, channel="terminal", user_id="local", on_text=on_text
+            )
+            
+            if result.recalled_memory:
+                print_info("\n  [自动召回] 找到相关记忆")
+            if result.errors:
+                print(f"\n{YELLOW}API Error: {'; '.join(result.errors)}{RESET}\n")
+                continue
+            print("\n")
+    finally:
+        app.cron_scheduler.stop()
 
 
 if __name__ == "__main__":

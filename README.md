@@ -181,6 +181,7 @@ trustworthy-cli
 python -m trustworthy_assistant.cli
 ```
 Run this from the repository root after `python -m pip install -e .`.
+If `workspace/CRON.json` exists, the CLI also starts the background cron scheduler automatically.
 
 ### 4. Run WeCom Bot
 ```bash
@@ -190,6 +191,7 @@ python -m trustworthy_assistant.run_wecom_bot
 ```
 
 Then configure your WeCom webhook URL: `http://your-domain:8000/wecom/webhook`
+The WeCom process also starts the cron scheduler automatically.
 
 ---
 
@@ -213,6 +215,9 @@ You > /agents              # List available agents
 You > /switch <agent_id>   # Switch to another agent
 You > /sessions            # List persisted sessions
 You > /maintain            # Run maintenance once
+You > /cron                # Show cron scheduler status
+You > /cron reload         # Reload jobs from CRON.json
+You > /cron run <job_id>   # Trigger a cron job immediately
 You > /skills              # List discovered skills
 You > /benchmarks          # Run benchmark suite
 You > /supervisor          # Show supervisor status
