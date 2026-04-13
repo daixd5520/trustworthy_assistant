@@ -32,6 +32,7 @@
 - 🎯 **流式输出**: 支持实时输出模型响应
 - 🧠 **向量记忆**: 基于 embeddings 的语义检索能力
 - 💬 **WeCom 机器人**: 支持企业微信机器人接入
+- 💬 **个人微信机器人**: 支持 iLink / ClawBot 方式绑定个人微信
 - 🛡️ **Supervisor 工作流**: 内置 plan / execute / review / verify 流程
 
 ---
@@ -44,6 +45,7 @@ trustworthy_assistant/
 │   └── trustworthy_assistant/ # Python package
 │       ├── channels/          # 多通道接入
 │       │   └── wecom.py       # 企业微信集成
+│       │   └── wechat.py      # 个人微信 iLink 集成
 │       ├── memory/            # 可信记忆系统
 │       │   ├── models.py
 │       │   ├── repository.py
@@ -70,6 +72,8 @@ trustworthy_assistant/
 │       ├── app.py             # 应用入口工厂
 │       ├── cli.py             # CLI 入口
 │       ├── config.py          # 配置管理
+│       ├── run_wechat_bot.py  # 个人微信 Bot 启动入口
+│       ├── run_wechat_login.py # 个人微信扫码登录入口
 │       └── run_wecom_bot.py   # WeCom 启动入口
 ├── workspace_template/        # 工作区模板
 ├── pyproject.toml             # 打包配置
@@ -127,6 +131,7 @@ python -m pip install -e .
 - Anthropic 或兼容服务商的 API Key
 - 可选: OpenAI API Key，用于更好的向量检索
 - 可选: 企业微信凭证，用于 WeCom 机器人
+- 可选: iLink / ClawBot 个人微信接入能力
 
 ---
 
@@ -169,6 +174,14 @@ WECOM_AGENT_ID=1000001
 WECOM_SECRET=xxxxxxxxxxxxx
 ```
 
+**可选配置：个人微信 iLink / ClawBot**
+
+```env
+WECHAT_ILINK_BASE_URL=https://ilinkai.weixin.qq.com
+WECHAT_QR_BOT_TYPE=3
+WECHAT_ACCOUNT_ID=
+```
+
 ### 3. 启动 CLI
 
 ```bash
@@ -190,6 +203,22 @@ python -m trustworthy_assistant.run_wecom_bot
 
 随后将企业微信 webhook 配置到 `http://your-domain:8000/wecom/webhook`。
 WeCom 进程也会自动启动 cron 调度器。
+
+### 5. 扫码登录个人微信
+
+```bash
+trustworthy-wechat-login
+```
+
+用微信扫码后，账号 token 会被保存在本地 `.wechat_personal/` 目录。
+
+### 6. 启动个人微信 Bot
+
+```bash
+trustworthy-wechat
+# 或
+python -m trustworthy_assistant.run_wechat_bot
+```
 
 ---
 
@@ -261,6 +290,22 @@ candidate → confirmed → deprecated → archived
 ```bash
 trustworthy-wecom
 ```
+
+---
+
+## 💬 个人微信集成
+
+### 使用步骤
+1. 运行 `trustworthy-wechat-login`
+2. 用个人微信扫描终端中的二维码
+3. 等待登录成功并写入本地 `account_id` 和 token
+4. 运行 `trustworthy-wechat` 启动长轮询 bot
+
+### 当前能力
+- 使用 iLink / ClawBot 风格的 HTTP 接口
+- 登录态与上下文 token 保存在 `.wechat_personal/`
+- 当前仅支持文本消息
+- 复用现有 `turn_processor` 和 session 链路
 
 ---
 

@@ -24,6 +24,9 @@ class AppConfig:
     wecom_corp_id: str | None = None
     wecom_agent_id: str | None = None
     wecom_secret: str | None = None
+    wechat_ilink_base_url: str = "https://ilinkai.weixin.qq.com"
+    wechat_qr_bot_type: str = "3"
+    wechat_account_id: str | None = None
 
     @property
     def bootstrap_files(self) -> list[str]:
@@ -57,4 +60,7 @@ def load_config(root_dir: Path | None = None) -> AppConfig:
         wecom_corp_id=os.getenv("WECOM_CORP_ID"),
         wecom_agent_id=os.getenv("WECOM_AGENT_ID"),
         wecom_secret=os.getenv("WECOM_SECRET"),
+        wechat_ilink_base_url=os.getenv("WECHAT_ILINK_BASE_URL", "https://ilinkai.weixin.qq.com"),
+        wechat_qr_bot_type=os.getenv("WECHAT_QR_BOT_TYPE", "3"),
+        wechat_account_id=os.getenv("WECHAT_ACCOUNT_ID") or None,
     )

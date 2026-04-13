@@ -32,6 +32,7 @@
 - 🎯 **Streaming Output** - Real-time response generation for better UX
 - 🧠 **Vector Memory** - Semantic search using embeddings (OpenAI + ChromaDB)
 - 💬 **WeCom Bot** - Enterprise WeChat integration as a new channel
+- 💬 **Personal WeChat Bot** - iLink / ClawBot bridge for personal WeChat login
 - 🛡️ **Supervisor Workflow** - Plan-execute-review-verify with policies and gates
 
 ---
@@ -44,6 +45,7 @@ trustworthy_assistant/
 │   └── trustworthy_assistant/ # Python package
 │       ├── channels/          # Multi-channel support
 │       │   └── wecom.py       # WeCom (Enterprise WeChat) integration
+│       │   └── wechat.py      # Personal WeChat iLink integration
 │       ├── memory/            # Trustworthy Memory System
 │       │   ├── models.py      # Memory data models
 │       │   ├── repository.py  # Memory persistence (ledger)
@@ -70,6 +72,8 @@ trustworthy_assistant/
 │       ├── app.py             # Application factory
 │       ├── cli.py             # CLI interface
 │       ├── config.py          # Configuration management
+│       ├── run_wechat_bot.py  # Personal WeChat bot entrypoint
+│       ├── run_wechat_login.py # Personal WeChat login entrypoint
 │       └── run_wecom_bot.py   # WeCom bot entrypoint
 ├── workspace_template/        # Workspace template
 │   ├── SOUL.md
@@ -137,6 +141,7 @@ python -m pip install -e .
 - An API key for Anthropic (or compatible provider)
 - (Optional) OpenAI API key for better embeddings
 - (Optional) WeCom credentials for WeChat bot
+- (Optional) iLink / ClawBot access for personal WeChat
 
 ---
 
@@ -174,6 +179,13 @@ WECOM_AGENT_ID=1000001
 WECOM_SECRET=xxxxxxxxxxxxx
 ```
 
+**Optional (Personal WeChat via iLink / ClawBot):**
+```env
+WECHAT_ILINK_BASE_URL=https://ilinkai.weixin.qq.com
+WECHAT_QR_BOT_TYPE=3
+WECHAT_ACCOUNT_ID=
+```
+
 ### 3. Run the CLI (with Streaming!)
 ```bash
 trustworthy-cli
@@ -192,6 +204,20 @@ python -m trustworthy_assistant.run_wecom_bot
 
 Then configure your WeCom webhook URL: `http://your-domain:8000/wecom/webhook`
 The WeCom process also starts the cron scheduler automatically.
+
+### 5. Login Personal WeChat
+```bash
+trustworthy-wechat-login
+```
+
+Scan the QR code with WeChat. After login, the account token is stored locally under `.wechat_personal/`.
+
+### 6. Run Personal WeChat Bot
+```bash
+trustworthy-wechat
+# or
+python -m trustworthy_assistant.run_wechat_bot
+```
 
 ---
 
@@ -260,6 +286,22 @@ Combines three search strategies:
 ```bash
 trustworthy-wecom
 ```
+
+---
+
+## 💬 Personal WeChat Integration
+
+### Setup
+1. Run `trustworthy-wechat-login`
+2. Scan the QR code with your personal WeChat account
+3. Wait until the login flow stores `account_id` and token locally
+4. Start the long-poll bot with `trustworthy-wechat`
+
+### Notes
+- Uses the iLink / ClawBot HTTP bridge style API
+- Stores account state under `.wechat_personal/`
+- Currently supports text messages only
+- Reuses the same `turn_processor` and session pipeline as the CLI
 
 ---
 

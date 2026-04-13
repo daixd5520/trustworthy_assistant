@@ -30,6 +30,7 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
     "pydantic>=2.0.0",
+    "qrcode>=7.4.2",
 ]
 
 [project.optional-dependencies]
@@ -41,6 +42,8 @@ dev = [
 [project.scripts]
 trustworthy-cli = "trustworthy_assistant.cli:run"
 trustworthy-wecom = "trustworthy_assistant.run_wecom_bot:main"
+trustworthy-wechat = "trustworthy_assistant.run_wechat_bot:main"
+trustworthy-wechat-login = "trustworthy_assistant.run_wechat_login:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/trustworthy_assistant"]
