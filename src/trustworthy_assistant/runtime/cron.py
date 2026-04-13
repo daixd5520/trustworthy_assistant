@@ -30,6 +30,8 @@ class CronJobState:
     last_status: str = "idle"
     last_error: str = ""
     last_result_preview: str = ""
+    channel: str = ""
+    sender_id: str = ""
     _next_run_dt: datetime | None = field(default=None, repr=False, compare=False)
 
     @property
@@ -53,6 +55,7 @@ class CronScheduler:
         turn_processor,
         on_event: Callable[[str], None] | None = None,
         poll_seconds: float = 15.0,
+        channel_sender: Callable[[str, str, str], None] | None = None,
     ) -> None:
         self.workspace_dir = Path(workspace_dir)
         self.cron_file = self.workspace_dir / "CRON.json"
@@ -60,6 +63,7 @@ class CronScheduler:
         self.turn_processor = turn_processor
         self.on_event = on_event or (lambda _message: None)
         self.poll_seconds = poll_seconds
+        self.channel_sender = channel_sender
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -142,7 +146,7 @@ class CronScheduler:
         self._execute_job(job_id=job_id, scheduled_for=_now_utc(), manual=True)
         return True, f"cron job triggered: {job_id}"
 
-    def add_dynamic_job(self, job_id: str, message: str, delay_minutes: int) -> None:
+    def add_dynamic_job(self, job_id: str, message: str, delay_minutes: int, channel: str = "", sender_id: str = "") -> None:
         from datetime import timedelta
         fire_at = _now_utc() + timedelta(minutes=delay_minutes)
         job = CronJobState(
@@ -156,6 +160,8 @@ class CronScheduler:
             agent_id="",
             delete_after_run=True,
             raw={},
+            channel=channel,
+            sender_id=sender_id,
         )
         job._next_run_dt = fire_at
         job.next_run_at = fire_at.isoformat()
@@ -196,6 +202,8 @@ class CronScheduler:
             payload_kind = job.payload_kind
             delete_after_run = job.delete_after_run
             job_name = job.name
+            job_channel = job.channel
+            job_sender_id = job.sender_id
         if payload_kind != "agent_turn":
             self._mark_result(
                 job_id,
@@ -203,6 +211,27 @@ class CronScheduler:
                 error=f"unsupported payload kind: {payload_kind}",
                 preview="",
             )
+            return
+        is_reminder = job_channel and job_sender_id and message.startswith("[Reminder]")
+        if is_reminder:
+            reminder_text = message.replace("[Reminder]", "", 1).strip()
+            self.on_event(f"delivering reminder ({job_id}) at {scheduled_for.isoformat()}")
+            try:
+                if self.channel_sender:
+                    self.channel_sender(job_channel, job_sender_id, f"⏰ 提醒：{reminder_text}")
+                    self._mark_result(job_id, status="ok", error="", preview=reminder_text[:120])
+                    self.on_event(f"reminder {job_id} delivered to {job_channel}/{job_sender_id}")
+                else:
+                    self.on_event(f"reminder {job_id}: {reminder_text}")
+                    self._mark_result(job_id, status="ok", error="", preview=reminder_text[:120])
+            except Exception as exc:
+                self._mark_result(job_id, status="error", error=str(exc), preview="")
+                self.on_event(f"reminder {job_id} delivery failed: {exc}")
+            if delete_after_run and not manual:
+                self._remove_job_from_file(job_id)
+                with self._lock:
+                    self._jobs.pop(job_id, None)
+                self.on_event(f"job {job_id} removed after run")
             return
         agent = self.agent_registry.get(agent_id)
         trigger_label = "manual" if manual else scheduled_for.isoformat()
@@ -223,6 +252,13 @@ class CronScheduler:
                 return
             self._mark_result(job_id, status="ok", error="", preview=preview)
             self.on_event(f"job {job_id} completed")
+            if job_channel and job_sender_id and self.channel_sender:
+                try:
+                    reply_text = (result.assistant_text or "").strip()
+                    if reply_text:
+                        self.channel_sender(job_channel, job_sender_id, reply_text)
+                except Exception as exc:
+                    self.on_event(f"failed to route result to {job_channel}/{job_sender_id}: {exc}")
             if delete_after_run and not manual:
                 self._remove_job_from_file(job_id)
                 with self._lock:

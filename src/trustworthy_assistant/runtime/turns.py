@@ -50,6 +50,7 @@ class TurnProcessor:
         )
 
     def process_turn(self, user_input: str, agent: AgentProfile, channel: str = "terminal", user_id: str = "local") -> TurnResult:
+        self.tool_registry.set_channel_context(channel, user_id)
         bootstrap_data = self.bootstrap_loader.load_all(mode=agent.prompt_mode)
         self.skills_catalog.discover()
         skills_block = self.skills_catalog.format_prompt_block()
@@ -138,6 +139,7 @@ class TurnProcessor:
     
     def process_turn_stream(self, user_input: str, agent: AgentProfile, channel: str = "terminal", 
                            user_id: str = "local", on_text: Optional[Callable[[str], None]] = None) -> TurnResult:
+        self.tool_registry.set_channel_context(channel, user_id)
         bootstrap_data = self.bootstrap_loader.load_all(mode=agent.prompt_mode)
         self.skills_catalog.discover()
         skills_block = self.skills_catalog.format_prompt_block()

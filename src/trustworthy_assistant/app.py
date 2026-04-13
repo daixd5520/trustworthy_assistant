@@ -58,12 +58,12 @@ def build_app(root_dir=None, on_tool=None, on_cron_event=None) -> TrustworthyAss
     _reminder_state: dict = {"counter": 0}
     cron_scheduler_placeholder: list = [None]
 
-    def _reminder_callback(message: str, delay_minutes: int) -> None:
+    def _reminder_callback(message: str, delay_minutes: int, channel: str = "", sender_id: str = "") -> None:
         _reminder_state["counter"] += 1
         job_id = f"reminder-{_reminder_state['counter']}"
         cs = cron_scheduler_placeholder[0]
         if cs is not None:
-            cs.add_dynamic_job(job_id, message, delay_minutes)
+            cs.add_dynamic_job(job_id, message, delay_minutes, channel=channel, sender_id=sender_id)
 
     tools = ToolRegistry(memory_service, on_tool=on_tool, reminder_callback=_reminder_callback)
 
