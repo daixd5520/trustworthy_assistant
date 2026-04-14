@@ -49,6 +49,39 @@ def _parse_minimax_tool_call(text: str) -> list[NormalizedToolCall]:
     return calls
 
 
+def _parse_bracket_tool_call(text: str) -> list[NormalizedToolCall]:
+    if "[TOOL_CALL]" not in text:
+        return []
+    calls: list[NormalizedToolCall] = []
+    block_pattern = re.compile(r"\[TOOL_CALL\](.*?)\[/TOOL_CALL\]", re.DOTALL)
+    tool_pattern = re.compile(r'tool\s*=>\s*"([^"]+)"')
+    args_pattern = re.compile(r"args\s*=>\s*\{(.*)\}", re.DOTALL)
+    flag_pattern = re.compile(r"--([a-zA-Z0-9_-]+)\s+\"((?:\\\"|[^\"])*)\"")
+    for match in block_pattern.finditer(text):
+        raw = match.group(0)
+        body = match.group(1)
+        tool_match = tool_pattern.search(body)
+        if not tool_match:
+            continue
+        tool_name = tool_match.group(1).strip()
+        params: dict[str, Any] = {}
+        args_match = args_pattern.search(body)
+        if args_match:
+            args_body = args_match.group(1)
+            for flag_match in flag_pattern.finditer(args_body):
+                params[flag_match.group(1)] = flag_match.group(2).replace('\\"', '"').strip()
+        calls.append(
+            NormalizedToolCall(
+                name=tool_name,
+                input=params,
+                tool_use_id=None,
+                result_mode="text_feedback",
+                raw=raw,
+            )
+        )
+    return calls
+
+
 def normalize_response(response: Any) -> NormalizedResponse:
     texts: list[NormalizedTextBlock] = []
     tool_calls: list[NormalizedToolCall] = []
@@ -71,6 +104,8 @@ def normalize_response(response: Any) -> NormalizedResponse:
             continue
         if text:
             parsed_calls = _parse_minimax_tool_call(text)
+            if not parsed_calls:
+                parsed_calls = _parse_bracket_tool_call(text)
             if parsed_calls:
                 tool_calls.extend(parsed_calls)
                 continue

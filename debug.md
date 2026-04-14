@@ -143,3 +143,13 @@
 - 检查当前 `file_item` / `image_item` 负载与历史埋点，确认发送链路是否缺字段或字段格式不对
 - 如现有证据不够，只补最小埋点到入站图片提取、下载解密、出站文件发送三处
 - 复现一次“发文件”和“一张图片给 bot”，对照 pre-fix 日志后再决定最小修复
+
+## Latest Follow-up
+
+- 2026-04-14
+- 新症状：
+  - bot 发出的文件在微信里可见，但 PC 与手机端都无法完成预览或下载，进度总卡在最后
+- 本轮待确认点：
+  1. 发送链路里 `getuploadurl -> CDN upload -> sendmessage(file_item)` 三段是否都返回了可用字段
+  2. 最终 `file_item` 的 `media` / `filekey` / `download_encrypted_query_param` / 大小字段是否与微信客户端下载预期一致
+  3. 当前运行账号与最新登录账号是否一致，避免把旧账号状态误当成文件协议问题

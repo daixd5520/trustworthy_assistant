@@ -591,6 +591,11 @@ def _decode_wechat_aes_key(raw_value: str) -> bytes:
     raise ValueError(f"Unsupported AES key format (len={len(text)})")
 
 
+def _encode_outbound_media_aes_key(aeskey_hex: str) -> str:
+    # Outbound media payloads expect the hex string encoded as base64.
+    return base64.b64encode(aeskey_hex.encode("ascii")).decode("ascii")
+
+
 class ILinkWeChatClient:
     def __init__(self, base_url: str, timeout: float = API_TIMEOUT_SECONDS) -> None:
         self.base_url = _ensure_trailing_slash(base_url)
@@ -799,7 +804,7 @@ class ILinkWeChatClient:
         items: list[dict[str, Any]] = []
         if caption:
             items.append({"type": MESSAGE_ITEM_TEXT, "text_item": {"text": caption}})
-        aes_key_b64 = base64.b64encode(bytes.fromhex(uploaded.aeskey_hex)).decode("utf-8")
+        aes_key_b64 = _encode_outbound_media_aes_key(uploaded.aeskey_hex)
         items.append({
             "type": MESSAGE_ITEM_IMAGE,
             "image_item": {
@@ -819,7 +824,7 @@ class ILinkWeChatClient:
         items: list[dict[str, Any]] = []
         if caption:
             items.append({"type": MESSAGE_ITEM_TEXT, "text_item": {"text": caption}})
-        aes_key_b64 = base64.b64encode(bytes.fromhex(uploaded.aeskey_hex)).decode("utf-8")
+        aes_key_b64 = _encode_outbound_media_aes_key(uploaded.aeskey_hex)
         items.append({
             "type": MESSAGE_ITEM_VIDEO,
             "video_item": {
@@ -837,7 +842,7 @@ class ILinkWeChatClient:
         items: list[dict[str, Any]] = []
         if caption:
             items.append({"type": MESSAGE_ITEM_TEXT, "text_item": {"text": caption}})
-        aes_key_b64 = base64.b64encode(bytes.fromhex(uploaded.aeskey_hex)).decode("utf-8")
+        aes_key_b64 = _encode_outbound_media_aes_key(uploaded.aeskey_hex)
         items.append({
             "type": MESSAGE_ITEM_FILE,
             "file_item": {
