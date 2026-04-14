@@ -117,7 +117,7 @@
 
 # Debug Session
 
-- Status: [OPEN]
+- Status: [RESOLVED]
 - Started At: 2026-04-14
 - Scope:
   - 微信发送文件后可见但无法下载/预览
@@ -153,3 +153,71 @@
   1. 发送链路里 `getuploadurl -> CDN upload -> sendmessage(file_item)` 三段是否都返回了可用字段
   2. 最终 `file_item` 的 `media` / `filekey` / `download_encrypted_query_param` / 大小字段是否与微信客户端下载预期一致
   3. 当前运行账号与最新登录账号是否一致，避免把旧账号状态误当成文件协议问题
+
+## Latest Evidence
+
+- `F1-F3` 埋点证明 `getuploadurl` 与 CDN 上传成功，上传阶段不是根因。
+- `F5-F6` 埋点证明 `sendmessage` 成功返回 200，微信侧接受了文件消息。
+- 对照 `nanobot` 与 `hermes-agent` 的同协议实现，定位到当前代码出站 `media.aes_key` 编码方式不一致：
+  - 旧逻辑：`bytes.fromhex(aeskey_hex)` 后再 base64
+  - 正确逻辑：`aeskey_hex` 字符串本身再 base64
+- `post-fix` 过程中出现新的症状：模型直接返回原始 `[TOOL_CALL]...[/TOOL_CALL]` 文本；日志显示 `tool_roundtrips = 0`，说明响应归一化层未识别这类旧式工具调用语法。
+
+## Resolution
+
+- 文件下载/预览根因：出站媒体 `media.aes_key` 编码错误，导致微信客户端下载阶段拿到错误密钥，表现为消息可见但预览/下载卡在最后。
+- 次生问题根因：`normalize_response()` 只识别原生 `tool_use` 与 `<minimax:tool_call>`，未兼容 `[TOOL_CALL]...[/TOOL_CALL]`，导致模型偶发输出旧式工具调用时被原样发回微信。
+- Fix:
+  - 新增 `_encode_outbound_media_aes_key()`，统一将图片/视频/文件的出站 `media.aes_key` 改为“hex 字符串再 base64”的协议兼容格式。
+  - 为 `normalize_response()` 新增 `[TOOL_CALL]...[/TOOL_CALL]` 解析兼容，将 `send_file` 一类旧式文本工具调用恢复为真正的工具执行。
+- Verification:
+  - 用户确认：重启 bot 后，不再返回原始 `[TOOL_CALL]...[/TOOL_CALL]` 文本，且文件已恢复正常预览/下载。
+
+---
+
+# Debug Session
+
+- Status: [RESOLVED]
+- Started At: 2026-04-14
+- Scope:
+  - 微信用户发给 bot 的文件没有被识别/接收
+- Symptoms:
+  - 用户反馈“现在他收不到我发的文件”
+- Guardrails:
+  - 在拿到运行时证据前，不修改业务逻辑
+  - 第一处代码变更仅用于埋点和证据收集
+
+## Hypotheses
+
+1. 入站 `item_list` 中的文件类型没有被当前解析逻辑覆盖，消息在 `normalize_incoming_message()` 前后被直接忽略。
+2. 当前实现只支持入站图片，不支持入站文件下载和落地，所以 bot 实际“看不到文件内容”。
+3. 文件消息的 `media` 字段与图片存在协议差异，当前没有正确提取 `encrypt_query_param` / `aes_key`。
+4. 文件可能以引用、混合消息或附件形式出现，当前仅扫描顶层 `item_list` 导致遗漏。
+5. 当前运行 bot 与仓库代码或账号环境不一致，导致现象与代码阅读结果不一致。
+
+## Evidence Plan
+
+- 先检查当前入站解析代码是否存在文件分支，以及已有 debug 日志是否记录了文件类型消息
+- 若现有证据不足，只补最小埋点到入站原始消息摘要、文件提取、文件下载落地三处
+- 让用户复现一次“给 bot 发文件”，读取 `pre-fix` 日志后再决定最小修复
+
+## Latest Evidence
+
+- `W0` 日志证明微信文件消息确实到达，`item.type = 4`，且 `file_item.media` 内已有 `aes_key`、`encrypt_query_param`、`full_url`。
+- `W4` 日志证明该消息随后被 `normalize_incoming_message()` 跳过，因为旧逻辑只接受 `text / quote / images`。
+- 第一轮修复后，`W5/W7` 日志显示入站文件开始走下载链路，但解密失败，错误为 `Invalid padding bytes.`。
+- 对照 `_decode_wechat_aes_key()` 的候选顺序，定位到文件 `aes_key` 为 `base64(hex-string)` 格式时，会优先误用 32 字节 ASCII hex 文本作为 AES key。
+- 第二轮修复后，`W6` 日志显示 `llm-resume.pdf` 已成功落地到本地路径。
+- 工具层直接验证表明：`read_file()` 之前按 UTF-8 读取 PDF 二进制，导致模型误判为“图片格式/读不了”；为 `.pdf` 增加 `pypdf` 提取后，可直接拿到正文。
+
+## Resolution
+
+- 根因一：当前微信入站解析完全没有文件分支，导致纯文件消息被直接忽略。
+- 根因二：入站文件 AES key 的一种编码变体在解码顺序上被误判，导致文件下载后解密失败。
+- 根因三：上层 `read_file()` 不支持 PDF，拿到本地 PDF 后仍会按纯文本二进制读取，造成模型误判。
+- Fix:
+  - 新增入站文件提取、下载落地与 `turn_input` 组装，使 bot 能识别并接收用户发来的文件。
+  - 调整 `_decode_wechat_aes_key()` 的候选顺序，优先将 `base64(hex-string)` 转回真实 AES key。
+  - 为 `read_file()` 增加 `.pdf` 分支，使用 `pypdf` 抽取正文，并把 `pypdf` 加入项目依赖。
+- Verification:
+  - 用户确认：重启 bot 后，再发送 PDF，bot 已能正常接收并读取，不再说“文件收到了但现在读取不了”。

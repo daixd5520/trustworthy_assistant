@@ -268,6 +268,17 @@ class IncomingWeChatImage:
 
 
 @dataclass(slots=True)
+class IncomingWeChatFile:
+    encrypt_query_param: str
+    aes_key_b64: str
+    file_name: str = ""
+    mime_type: str = ""
+    local_path: str = ""
+    is_quoted: bool = False
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class IncomingWeChatMessage:
     sender_id: str
     text: str
@@ -277,6 +288,7 @@ class IncomingWeChatMessage:
     raw: dict[str, Any]
     quoted: IncomingWeChatReference | None = None
     images: list[IncomingWeChatImage] = field(default_factory=list)
+    files: list[IncomingWeChatFile] = field(default_factory=list)
 
 
 def list_wechat_accounts(root_dir: Path) -> list[WeChatAccount]:
@@ -379,7 +391,8 @@ def normalize_incoming_message(message: dict[str, Any]) -> IncomingWeChatMessage
     text = _text_from_item_list(item_list)
     quoted = _extract_reference_from_item_list(item_list)
     images = _extract_images_from_item_list(item_list)
-    if not text and quoted is None and not images:
+    files = _extract_files_from_item_list(item_list)
+    if not text and quoted is None and not images and not files:
         return None
     context_token = str(message.get("context_token") or "").strip()
     message_id = str(message.get("message_id") or "").strip()
@@ -399,6 +412,7 @@ def normalize_incoming_message(message: dict[str, Any]) -> IncomingWeChatMessage
         received_at=received_at,
         quoted=quoted,
         images=images,
+        files=files,
         raw=message,
     )
 
@@ -528,6 +542,47 @@ def _extract_images_from_item_list(item_list: Any) -> list[IncomingWeChatImage]:
     return images
 
 
+def _append_file_from_item(files: list[IncomingWeChatFile], item: Any, *, is_quoted: bool) -> None:
+    if int((item or {}).get("type") or 0) != MESSAGE_ITEM_FILE:
+        return
+    file_item = (item or {}).get("file_item") or {}
+    media = file_item.get("media") or {}
+    encrypt_query_param = str(media.get("encrypt_query_param") or file_item.get("encrypt_query_param") or "").strip()
+    aes_key_b64 = str(
+        file_item.get("aeskey")
+        or media.get("aes_key")
+        or file_item.get("aes_key")
+        or ""
+    ).strip()
+    if not encrypt_query_param or not aes_key_b64:
+        return
+    files.append(
+        IncomingWeChatFile(
+            encrypt_query_param=encrypt_query_param,
+            aes_key_b64=aes_key_b64,
+            file_name=str(file_item.get("file_name") or file_item.get("name") or "").strip(),
+            mime_type=str(file_item.get("mime_type") or file_item.get("content_type") or "").strip(),
+            is_quoted=is_quoted,
+            raw=file_item if isinstance(file_item, dict) else {},
+        )
+    )
+
+
+def _extract_files_from_item_list(item_list: Any) -> list[IncomingWeChatFile]:
+    if not isinstance(item_list, list):
+        return []
+    files: list[IncomingWeChatFile] = []
+    for item in item_list:
+        _append_file_from_item(files, item, is_quoted=False)
+        ref = _reference_payload_from_item(item)
+        if not isinstance(ref, dict):
+            continue
+        ref_item = ref.get("message_item")
+        if isinstance(ref_item, dict):
+            _append_file_from_item(files, ref_item, is_quoted=True)
+    return files
+
+
 def _guess_image_media_type(image_bytes: bytes, fallback: str = "") -> tuple[str, str]:
     if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png", ".png"
@@ -573,7 +628,6 @@ def _decode_wechat_aes_key(raw_value: str) -> bytes:
             pass
     try:
         decoded = base64.b64decode(text)
-        candidates.append(decoded)
         try:
             decoded_text = decoded.decode("ascii")
         except UnicodeDecodeError:
@@ -583,6 +637,7 @@ def _decode_wechat_aes_key(raw_value: str) -> bytes:
                 candidates.append(bytes.fromhex(decoded_text))
             except ValueError:
                 pass
+        candidates.append(decoded)
     except (binascii.Error, ValueError):
         pass
     for candidate in candidates:
@@ -1148,6 +1203,52 @@ class WeChatBotRunner:
                 # #endregion
                 self.on_event(f"failed to download inbound image for {inbound.sender_id}: {exc}")
 
+    def _materialize_inbound_files(self, inbound: IncomingWeChatMessage) -> None:
+        if not inbound.files or not self._client or not self._account:
+            return
+        media_dir = _incoming_media_dir(self.config.root_dir, self._account.account_id)
+        for index, file in enumerate(inbound.files, start=1):
+            if file.local_path:
+                continue
+            trace_id = f"wxfile-in-{inbound.message_id or 'unknown'}-{index}"
+            # #region debug-point W5:materialize-file
+            _debug_emit("W5", "wechat.py:_materialize_inbound_files", "start materialize inbound file", {
+                "sender_id": inbound.sender_id,
+                "message_id": inbound.message_id,
+                "index": index,
+                "file_name": file.file_name,
+                "has_encrypt_query_param": bool(file.encrypt_query_param),
+                "has_aes_key_b64": bool(file.aes_key_b64),
+            }, trace_id=trace_id)
+            # #endregion
+            try:
+                ciphertext = self._client.download_cdn_media(file.encrypt_query_param)
+                aes_key = _decode_wechat_aes_key(file.aes_key_b64)
+                plaintext = _aes_ecb_decrypt(ciphertext, aes_key)
+                file_name = file.file_name.strip() or f"{inbound.message_id or 'file'}-{index}.bin"
+                target = media_dir / file_name
+                if target.exists():
+                    target = media_dir / f"{target.stem}-{int(time.time() * 1000)}{target.suffix}"
+                target.write_bytes(plaintext)
+                file.local_path = str(target)
+                # #region debug-point W6:materialize-file-success
+                _debug_emit("W6", "wechat.py:_materialize_inbound_files", "materialize inbound file success", {
+                    "message_id": inbound.message_id,
+                    "index": index,
+                    "plaintext_len": len(plaintext),
+                    "local_path": file.local_path,
+                }, trace_id=trace_id)
+                # #endregion
+            except Exception as exc:
+                # #region debug-point W7:materialize-file-error
+                _debug_emit("W7", "wechat.py:_materialize_inbound_files", "materialize inbound file failed", {
+                    "message_id": inbound.message_id,
+                    "index": index,
+                    "error": str(exc)[:500],
+                }, trace_id=trace_id)
+                # #endregion
+                self.on_event(f"failed to download inbound file for {inbound.sender_id}: {exc}")
+
     @staticmethod
     def _build_turn_input(inbound: IncomingWeChatMessage) -> str:
         lines: list[str] = []
@@ -1185,6 +1286,32 @@ class WeChatBotRunner:
                 lines.append("如果需要理解图片，请使用 `read_image` 工具读取这些图片，再结合当前消息和引用内容回答。")
             else:
                 lines.append("不要说未收到图片；应说明图片已收到，但当前还无法读取其内容。")
+        if inbound.files:
+            current_files = [file for file in inbound.files if not file.is_quoted]
+            quoted_files = [file for file in inbound.files if file.is_quoted]
+            if current_files:
+                lines.append(f"用户这次还发送了 {len(current_files)} 个文件。")
+                for index, file in enumerate(current_files, start=1):
+                    label = file.file_name or f"文件 {index}"
+                    if file.local_path:
+                        lines.append(f"当前文件 {index}：{label}")
+                        lines.append(f"当前文件 {index} 本地路径：{file.local_path}")
+                    else:
+                        lines.append(f"当前文件 {index}：{label}，已收到，但当前下载失败。")
+            if quoted_files:
+                lines.append(f"被引用的上一条消息里还包含 {len(quoted_files)} 个文件。")
+                for index, file in enumerate(quoted_files, start=1):
+                    label = file.file_name or f"文件 {index}"
+                    if file.local_path:
+                        lines.append(f"被引用文件 {index}：{label}")
+                        lines.append(f"被引用文件 {index} 本地路径：{file.local_path}")
+                    else:
+                        lines.append(f"被引用文件 {index}：{label}，已收到，但当前下载失败。")
+            downloadable_files = [file for file in inbound.files if file.local_path]
+            if downloadable_files:
+                lines.append("如果需要查看文本类文件内容，请使用 `read_file` 工具读取这些文件，再结合当前消息回答。")
+            else:
+                lines.append("不要说未收到文件；应说明文件已收到，但当前还无法读取其内容。")
         if not lines:
             lines.append("用户发送了一条微信消息。")
         return "\n".join(lines)
@@ -1365,6 +1492,8 @@ class WeChatBotRunner:
                             node = item or {}
                             image_node = (node.get("image_item") or {}) if isinstance(node.get("image_item"), dict) else {}
                             media_node = (image_node.get("media") or {}) if isinstance(image_node.get("media"), dict) else {}
+                            file_node = (node.get("file_item") or {}) if isinstance(node.get("file_item"), dict) else {}
+                            file_media_node = (file_node.get("media") or {}) if isinstance(file_node.get("media"), dict) else {}
                             raw_item_summaries.append(
                                 {
                                     "type": node.get("type"),
@@ -1372,10 +1501,16 @@ class WeChatBotRunner:
                                     "has_ref_msg": isinstance(node.get("ref_msg"), dict),
                                     "image_item_keys": sorted(list(image_node.keys()))[:20],
                                     "media_keys": sorted(list(media_node.keys()))[:20],
+                                    "file_item_keys": sorted(list(file_node.keys()))[:20],
+                                    "file_media_keys": sorted(list(file_media_node.keys()))[:20],
+                                    "file_name": str(file_node.get("file_name") or "")[:120],
+                                    "file_len": str(file_node.get("len") or "")[:40],
                                     "image_aeskey_present": bool(image_node.get("aeskey")),
                                     "image_aes_key_present": bool(image_node.get("aes_key")),
                                     "media_aes_key_present": bool(media_node.get("aes_key")),
                                     "media_encrypt_query_param_present": bool(media_node.get("encrypt_query_param")),
+                                    "file_media_aes_key_present": bool(file_media_node.get("aes_key")),
+                                    "file_media_encrypt_query_param_present": bool(file_media_node.get("encrypt_query_param")),
                                     "thumb_size_keys": sorted(list((image_node.get("thumb_size") or {}).keys()))[:20] if isinstance(image_node.get("thumb_size"), dict) else [],
                                     "mid_size_keys": sorted(list((image_node.get("mid_size") or {}).keys()))[:20] if isinstance(image_node.get("mid_size"), dict) else [],
                                     "hd_size_keys": sorted(list((image_node.get("hd_size") or {}).keys()))[:20] if isinstance(image_node.get("hd_size"), dict) else [],
@@ -1393,6 +1528,18 @@ class WeChatBotRunner:
                     # #endregion
                     inbound = normalize_incoming_message(message)
                     if inbound is None:
+                        # #region debug-point W4:inbound-skipped
+                        _debug_emit("W4", "wechat.py:run_forever", "inbound message skipped by normalize_incoming_message", {
+                            "message_id": str((message or {}).get("message_id") or ""),
+                            "seq": str((message or {}).get("seq") or ""),
+                            "message_type": (message or {}).get("message_type"),
+                            "has_text": bool(_text_from_item_list(raw_item_list)),
+                            "has_quote": bool(_extract_reference_from_item_list(raw_item_list)),
+                            "image_count": len(_extract_images_from_item_list(raw_item_list)),
+                            "file_count": len(_extract_files_from_item_list(raw_item_list)),
+                            "item_types": [item.get("type") for item in raw_item_list[:8]] if isinstance(raw_item_list, list) else [],
+                        }, trace_id=raw_trace_id)
+                        # #endregion
                         continue
                     dedup_key = "|".join(
                         [
@@ -1425,6 +1572,7 @@ class WeChatBotRunner:
                         persist_context_token(self.config.root_dir, account.account_id, inbound.sender_id, inbound.context_token)
                         self._context_tokens[inbound.sender_id] = inbound.context_token
                     self._materialize_inbound_images(inbound)
+                    self._materialize_inbound_files(inbound)
                     turn_input = self._build_turn_input(inbound)
                     # #region debug-point Q1:turn-input
                     _debug_emit("Q1", "wechat.py:run_forever", "wechat turn input built", {
@@ -1433,11 +1581,12 @@ class WeChatBotRunner:
                         "has_quote": bool(inbound.quoted),
                         "quote_text": (inbound.quoted.text if inbound.quoted else "")[:160],
                         "image_count": len(inbound.images),
+                        "file_count": len(inbound.files),
                         "turn_input": turn_input[:500],
                     }, trace_id=trace_id)
                     # #endregion
                     self.on_event(
-                        f"recv {inbound.sender_id}: text={bool(inbound.text)} images={len(inbound.images)} quote={bool(inbound.quoted)}"
+                        f"recv {inbound.sender_id}: text={bool(inbound.text)} images={len(inbound.images)} files={len(inbound.files)} quote={bool(inbound.quoted)}"
                     )
                     if self._handle_approval_command(inbound):
                         continue

@@ -1,4 +1,5 @@
 import base64
+import csv
 import json
 import os
 import shlex
@@ -26,6 +27,22 @@ _BLOCKED_PREFIXES = [
     _HOME / ".kube",
 ]
 _COMMAND_TIMEOUT_DEFAULT = 20
+
+
+def _truncate_text(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + f"\n\n[... truncated, total {len(text)} chars ...]"
+
+
+def _looks_binary(data: bytes) -> bool:
+    if not data:
+        return False
+    if b"\x00" in data:
+        return True
+    sample = data[:1024]
+    text_bytes = sum(1 for byte in sample if byte in b"\t\n\r" or 32 <= byte <= 126)
+    return text_bytes / max(1, len(sample)) < 0.75
 _COMMAND_TIMEOUT_MAX = 30
 _COMMAND_OUTPUT_DEFAULT = 4000
 _COMMAND_OUTPUT_MAX = 12000
@@ -444,10 +461,129 @@ class ToolRegistry:
             return f"Error: Path not found: {path}"
         if not target.is_file():
             return f"Error: Not a file: {path}"
-        text = target.read_text(encoding="utf-8", errors="replace")
-        if len(text) <= max_chars:
-            return text
-        return text[:max_chars] + f"\n\n[... truncated, total {len(text)} chars ...]"
+        suffix = target.suffix.lower()
+        if suffix == ".pdf":
+            try:
+                from pypdf import PdfReader
+            except ImportError:
+                return "Error: PDF reading backend is not installed."
+            try:
+                reader = PdfReader(str(target))
+            except Exception as exc:
+                return f"Error: Failed to open PDF: {exc}"
+            parts: list[str] = []
+            total_chars = 0
+            for index, page in enumerate(reader.pages, start=1):
+                try:
+                    page_text = (page.extract_text() or "").strip()
+                except Exception as exc:
+                    page_text = f"[Page {index} extraction failed: {exc}]"
+                if not page_text:
+                    continue
+                block = f"[Page {index}]\n{page_text}"
+                parts.append(block)
+                total_chars += len(block) + 2
+                if total_chars >= max_chars:
+                    break
+            if not parts:
+                return "Error: No extractable text found in PDF. It may be scanned, image-based, or encrypted."
+            return _truncate_text("\n\n".join(parts), max_chars)
+        if suffix == ".docx":
+            try:
+                from docx import Document
+            except ImportError:
+                return "Error: DOCX reading backend is not installed."
+            try:
+                document = Document(str(target))
+            except Exception as exc:
+                return f"Error: Failed to open DOCX: {exc}"
+            parts: list[str] = []
+            for paragraph in document.paragraphs:
+                text = paragraph.text.strip()
+                if text:
+                    parts.append(text)
+            for table_index, table in enumerate(document.tables, start=1):
+                rows: list[str] = []
+                for row in table.rows:
+                    cells = [cell.text.strip() for cell in row.cells]
+                    if any(cells):
+                        rows.append(" | ".join(cells))
+                if rows:
+                    parts.append(f"[Table {table_index}]\n" + "\n".join(rows))
+            if not parts:
+                return "Error: No extractable text found in DOCX."
+            return _truncate_text("\n\n".join(parts), max_chars)
+        if suffix == ".xlsx":
+            try:
+                from openpyxl import load_workbook
+            except ImportError:
+                return "Error: XLSX reading backend is not installed."
+            try:
+                workbook = load_workbook(filename=str(target), read_only=True, data_only=True)
+            except Exception as exc:
+                return f"Error: Failed to open XLSX: {exc}"
+            parts: list[str] = []
+            for sheet in workbook.worksheets[:5]:
+                rows: list[str] = []
+                for row in sheet.iter_rows(max_row=50, values_only=True):
+                    cells = ["" if cell is None else str(cell).strip() for cell in row]
+                    if any(cells):
+                        rows.append(" | ".join(cells))
+                if rows:
+                    parts.append(f"[Sheet: {sheet.title}]\n" + "\n".join(rows))
+            if not parts:
+                return "Error: No extractable cells found in XLSX."
+            return _truncate_text("\n\n".join(parts), max_chars)
+        if suffix == ".pptx":
+            try:
+                from pptx import Presentation
+            except ImportError:
+                return "Error: PPTX reading backend is not installed."
+            try:
+                presentation = Presentation(str(target))
+            except Exception as exc:
+                return f"Error: Failed to open PPTX: {exc}"
+            parts: list[str] = []
+            for slide_index, slide in enumerate(list(presentation.slides)[:30], start=1):
+                texts: list[str] = []
+                for shape in slide.shapes:
+                    text = getattr(shape, "text", "").strip()
+                    if text:
+                        texts.append(text)
+                if texts:
+                    parts.append(f"[Slide {slide_index}]\n" + "\n".join(texts))
+            if not parts:
+                return "Error: No extractable text found in PPTX."
+            return _truncate_text("\n\n".join(parts), max_chars)
+        if suffix == ".csv":
+            try:
+                with target.open("r", encoding="utf-8", errors="replace", newline="") as handle:
+                    reader = csv.reader(handle)
+                    rows = []
+                    for index, row in enumerate(reader, start=1):
+                        rows.append(" | ".join(cell.strip() for cell in row))
+                        if index >= 100:
+                            break
+            except Exception as exc:
+                return f"Error: Failed to open CSV: {exc}"
+            if not rows:
+                return "(empty csv)"
+            return _truncate_text("\n".join(rows), max_chars)
+        if suffix == ".json":
+            try:
+                parsed = json.loads(target.read_text(encoding="utf-8"))
+            except Exception:
+                parsed = None
+            if parsed is not None:
+                return _truncate_text(json.dumps(parsed, ensure_ascii=False, indent=2), max_chars)
+        raw = target.read_bytes()
+        if _looks_binary(raw):
+            return (
+                f"Error: Unsupported binary file type: {target.suffix or '(no extension)'}.\n"
+                "Supported readable formats include: txt, md, json, csv, html, xml, pdf, docx, xlsx, pptx."
+            )
+        text = raw.decode("utf-8", errors="replace")
+        return _truncate_text(text, max_chars)
 
     def get_current_time(self) -> str:
         self.emit("get_current_time", "local")
