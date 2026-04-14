@@ -62,7 +62,7 @@ def _debug_emit(hypothesis_id: str, location: str, msg: str, data: dict[str, Any
     try:
         urllib.request.urlopen(
             urllib.request.Request(
-                "http://127.0.0.1:7777/event",
+                "http://127.0.0.1:7778/event",
                 data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
             ),
@@ -72,12 +72,18 @@ def _debug_emit(hypothesis_id: str, location: str, msg: str, data: dict[str, Any
         pass
 
 
-def _is_minimax_vlm_model(model_id: str) -> bool:
+def _is_minimax_text_model(model_id: str) -> bool:
+    normalized = (model_id or "").strip()
+    return normalized in {
+        "MiniMax-M2.7",
+        "MiniMax-M2.7-highspeed",
+    }
+
+
+def _is_minimax_vision_model(model_id: str) -> bool:
     normalized = (model_id or "").strip()
     return normalized in {
         "MiniMax-VL-01",
-        "MiniMax-M2.7",
-        "MiniMax-M2.7-highspeed",
     }
 
 
@@ -167,6 +173,11 @@ class ToolRegistry:
         self.vision_api_key = vision_api_key
         self.vision_base_url = vision_base_url
         self.vision_model_id = vision_model_id
+        if _is_minimax_vision_model(self.vision_model_id or ""):
+            if not self.vision_api_key and self.anthropic_api_key:
+                self.vision_api_key = self.anthropic_api_key
+            if not self.vision_base_url:
+                self.vision_base_url = _derive_minimax_openai_base_url(self.anthropic_base_url or "")
         self._vision_client: OpenAI | None = None
         self._minimax_vision_client: OpenAI | None = None
         self.supervisor_workflow = supervisor_workflow
@@ -505,6 +516,87 @@ class ToolRegistry:
             return "image/bmp"
         return ""
 
+    def _should_use_mmx_vision(self) -> bool:
+        minimax_base = (self.anthropic_base_url or "") + " " + (self.vision_base_url or "")
+        return bool(
+            self.anthropic_api_key
+            and (
+                _is_minimax_text_model(self.model_id)
+                or _is_minimax_vision_model(self.vision_model_id or "")
+                or "minimaxi.com" in minimax_base
+            )
+        )
+
+    def _run_mmx_vision_describe(self, image_path: Path, prompt: str, trace_id: str = "") -> str:
+        project_root = Path(__file__).resolve().parents[2]
+        wrapper = project_root / ".dbg" / "mmx_from_env.py"
+        if not wrapper.is_file():
+            return ""
+        command = [
+            "python3",
+            str(wrapper),
+            "vision",
+            "describe",
+            "--image",
+            str(image_path),
+            "--prompt",
+            prompt,
+            "--output",
+            "json",
+            "--quiet",
+        ]
+        # #region debug-point V2:mmx-vision
+        _debug_emit("V2", "tools.py:read_image", "trying mmx vision describe", {
+            "command": "python3 .dbg/mmx_from_env.py vision describe",
+            "image_path": str(image_path),
+        }, trace_id=trace_id)
+        # #endregion
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=str(project_root),
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except Exception as exc:
+            _debug_emit("V2", "tools.py:read_image", "mmx vision describe launch failed", {
+                "error": str(exc)[:500],
+            }, trace_id=trace_id)
+            return ""
+        stdout = (completed.stdout or "").strip()
+        stderr = (completed.stderr or "").strip()
+        if completed.returncode != 0:
+            _debug_emit("V2", "tools.py:read_image", "mmx vision describe failed", {
+                "returncode": completed.returncode,
+                "stdout": stdout[:500],
+                "stderr": stderr[:500],
+            }, trace_id=trace_id)
+            return ""
+        json_start = stdout.find("{")
+        json_end = stdout.rfind("}")
+        if json_start == -1 or json_end == -1 or json_end < json_start:
+            _debug_emit("V2", "tools.py:read_image", "mmx vision describe returned non-json output", {
+                "stdout": stdout[:500],
+            }, trace_id=trace_id)
+            return ""
+        try:
+            payload = json.loads(stdout[json_start:json_end + 1])
+        except Exception as exc:
+            _debug_emit("V2", "tools.py:read_image", "mmx vision describe json parse failed", {
+                "error": str(exc)[:300],
+                "stdout": stdout[:500],
+            }, trace_id=trace_id)
+            return ""
+        content = str(payload.get("content", "")).strip()
+        if content:
+            _debug_emit("V7", "tools.py:read_image", "mmx vision response summary", {
+                "message_content_type": type(payload.get("content", "")).__name__,
+                "base_status": payload.get("base_resp", {}).get("status_msg", ""),
+            }, trace_id=trace_id)
+        return content
+
     def read_image(self, path: str, prompt: str = "") -> str:
         self.emit("read_image", path)
         target = _resolve_safe_path(path, self.workspace_dir)
@@ -533,11 +625,22 @@ class ToolRegistry:
             "has_anthropic_client": self.anthropic_client is not None,
         }, trace_id=trace_id)
         # #endregion
+        if self._should_use_mmx_vision():
+            reply = self._run_mmx_vision_describe(target, user_prompt, trace_id=trace_id)
+            if reply:
+                # #region debug-point V6:mmx-success
+                _debug_emit("V6", "tools.py:read_image", "read_image succeeded via mmx", {
+                    "reply_preview": reply[:300],
+                }, trace_id=trace_id)
+                # #endregion
+                return reply
         if self.vision_api_key and self.vision_model_id:
             # #region debug-point V2:vision-branch
             _debug_emit("V2", "tools.py:read_image", "using dedicated vision backend", {
                 "vision_model_id": self.vision_model_id,
                 "vision_base_url": self.vision_base_url or "",
+                "request_mode": "openai-chat-completions-image_url-data-uri",
+                "prompt_len": len(user_prompt),
             }, trace_id=trace_id)
             # #endregion
             if self._vision_client is None:
@@ -564,6 +667,13 @@ class ToolRegistry:
                     ],
                     max_tokens=1200,
                 )
+                # #region debug-point V7:vision-response
+                _debug_emit("V7", "tools.py:read_image", "dedicated vision backend response summary", {
+                    "model": getattr(response, "model", ""),
+                    "finish_reason": getattr((response.choices or [None])[0], "finish_reason", ""),
+                    "message_content_type": type(getattr(getattr((response.choices or [None])[0], "message", None), "content", "")).__name__,
+                }, trace_id=trace_id)
+                # #endregion
                 reply = (response.choices[0].message.content or "").strip()
             except Exception as exc:
                 # #region debug-point V2:vision-error
@@ -571,55 +681,35 @@ class ToolRegistry:
                     "error": str(exc)[:500],
                 }, trace_id=trace_id)
                 # #endregion
+                if _is_minimax_vision_model(self.vision_model_id or "") and "unknown model" in str(exc).lower():
+                    return (
+                        "Error: Current MiniMax key cannot access `MiniMax-VL-01` "
+                        "(the API returned `unknown model`). "
+                        "Please replace it with a MiniMax key that has VL-01 access."
+                    )
                 return f"Error: Vision tool failed: {exc}"
-        elif _is_minimax_vlm_model(self.model_id):
-            minimax_base_url = _derive_minimax_openai_base_url(self.anthropic_base_url or "")
+        elif _is_minimax_text_model(self.model_id):
             # #region debug-point V2:minimax-openai-compat
-            _debug_emit("V2", "tools.py:read_image", "using minimax openai-compatible vision branch", {
+            _debug_emit("V2", "tools.py:read_image", "minimax text model cannot accept image input directly", {
                 "model_id": self.model_id,
-                "derived_base_url": minimax_base_url,
+                "vision_model_id": self.vision_model_id or "",
                 "has_api_key": bool(self.anthropic_api_key),
+                "request_mode": "unsupported-minimax-text-image",
             }, trace_id=trace_id)
             # #endregion
-            if not self.anthropic_api_key:
-                return "Error: MiniMax vision branch requires ANTHROPIC_API_KEY."
-            if self._minimax_vision_client is None:
-                self._minimax_vision_client = OpenAI(
-                    api_key=self.anthropic_api_key,
-                    base_url=minimax_base_url,
-                )
-            try:
-                response = self._minimax_vision_client.chat.completions.create(
-                    model=self.model_id,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": user_prompt},
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:{media_type};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
-                                    },
-                                },
-                            ],
-                        }
-                    ],
-                    max_tokens=1200,
-                )
-                reply = (response.choices[0].message.content or "").strip()
-            except Exception as exc:
-                # #region debug-point V2:minimax-openai-compat-error
-                _debug_emit("V2", "tools.py:read_image", "minimax openai-compatible vision branch failed", {
-                    "error": str(exc)[:500],
-                    "derived_base_url": minimax_base_url,
-                }, trace_id=trace_id)
-                # #endregion
-                return f"Error: Vision tool failed: {exc}"
+            return (
+                "Error: MiniMax text compatibility APIs do not support image input for `read_image`. "
+                "Please configure a dedicated vision backend with "
+                "`VISION_MODEL_ID=MiniMax-VL-01`. "
+                "If `VISION_API_KEY` or `VISION_BASE_URL` is omitted, the tool will reuse the current MiniMax key "
+                "and derive `https://api.minimaxi.com/v1` from `ANTHROPIC_BASE_URL`."
+            )
         elif self.anthropic_client is not None:
             # #region debug-point V3:anthropic-branch
             _debug_emit("V3", "tools.py:read_image", "using anthropic image branch", {
                 "model_id": self.model_id,
+                "request_mode": "anthropic-messages-image-base64",
+                "prompt_len": len(user_prompt),
             }, trace_id=trace_id)
             # #endregion
             try:
@@ -646,6 +736,11 @@ class ToolRegistry:
                         }
                     ],
                 )
+                # #region debug-point V7:anthropic-response
+                _debug_emit("V7", "tools.py:read_image", "anthropic vision response summary", {
+                    "content_blocks": len(getattr(response, "content", []) or []),
+                }, trace_id=trace_id)
+                # #endregion
                 texts = [getattr(block, "text", "") for block in getattr(response, "content", []) or [] if getattr(block, "text", "")]
                 reply = "\n".join(texts).strip()
             except Exception as exc:
@@ -662,13 +757,14 @@ class ToolRegistry:
                 "vision_model_id": self.vision_model_id or "",
                 "has_vision_api_key": bool(self.vision_api_key),
                 "anthropic_branch_blocked": self.anthropic_client is not None,
-                "minimax_vlm_model": _is_minimax_vlm_model(self.model_id),
+                "minimax_text_model": _is_minimax_text_model(self.model_id),
             }, trace_id=trace_id)
             # #endregion
             return (
                 "Error: No vision backend configured. "
                 "Set `VISION_API_KEY` and `VISION_MODEL_ID` "
-                "(or `OPENAI_API_KEY` plus `VISION_MODEL_ID`) for the `read_image` tool."
+                "(or `OPENAI_API_KEY` plus `VISION_MODEL_ID`) for the `read_image` tool. "
+                "For MiniMax, use `VISION_MODEL_ID=MiniMax-VL-01`."
             )
         if not reply:
             # #region debug-point V5:empty-reply

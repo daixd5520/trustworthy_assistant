@@ -151,7 +151,7 @@ def _debug_emit(hypothesis_id: str, location: str, msg: str, data: dict[str, Any
     try:
         urllib.request.urlopen(
             urllib.request.Request(
-                "http://127.0.0.1:7777/event",
+                "http://127.0.0.1:7778/event",
                 data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
             ),
@@ -669,6 +669,17 @@ class ILinkWeChatClient:
         aeskey = os.urandom(16)
         filekey = secrets.token_hex(16)
         filesize = _aes_ecb_padded_size(rawsize)
+        trace_id = f"wxsend-{filekey[:8]}"
+        # #region debug-point F1:upload-file-start
+        _debug_emit("F1", "wechat.py:upload_file", "prepare wechat file upload", {
+            "file_name": path.name,
+            "media_type": media_type,
+            "to_user_id": to_user_id,
+            "rawsize": rawsize,
+            "ciphertext_size": filesize,
+            "rawfilemd5": rawfilemd5,
+        }, trace_id=trace_id)
+        # #endregion
         upload_resp = self.get_upload_url(
             token=token,
             filekey=filekey,
@@ -679,6 +690,18 @@ class ILinkWeChatClient:
             filesize=filesize,
             aeskey_hex=aeskey.hex(),
         )
+        # #region debug-point F2:get-upload-url
+        _debug_emit("F2", "wechat.py:upload_file", "wechat getuploadurl response", {
+            "file_name": path.name,
+            "media_type": media_type,
+            "response_keys": sorted(list(upload_resp.keys()))[:20],
+            "ret": upload_resp.get("ret"),
+            "errcode": upload_resp.get("errcode"),
+            "errmsg": str(upload_resp.get("errmsg") or "")[:240],
+            "has_upload_param": bool(upload_resp.get("upload_param")),
+            "has_upload_full_url": bool(upload_resp.get("upload_full_url")),
+        }, trace_id=trace_id)
+        # #endregion
         upload_param = str(upload_resp.get("upload_param") or "")
         upload_full_url = str(upload_resp.get("upload_full_url") or "")
         if upload_full_url:
@@ -692,6 +715,14 @@ class ILinkWeChatClient:
             raise RuntimeError(f"getUploadUrl returned no upload target: {upload_resp}")
         ciphertext = _aes_ecb_encrypt(plaintext, aeskey)
         download_param = self.upload_to_cdn(upload_url, ciphertext)
+        # #region debug-point F3:upload-file-complete
+        _debug_emit("F3", "wechat.py:upload_file", "wechat file upload completed", {
+            "file_name": path.name,
+            "media_type": media_type,
+            "download_param_len": len(download_param),
+            "download_param_preview": download_param[:80],
+        }, trace_id=trace_id)
+        # #endregion
         return UploadedFileInfo(
             filekey=filekey,
             download_encrypted_query_param=download_param,
@@ -755,6 +786,18 @@ class ILinkWeChatClient:
                 "len": str(uploaded.file_size),
             },
         })
+        # #region debug-point F4:send-file-payload
+        _debug_emit("F4", "wechat.py:send_file", "wechat file item payload", {
+            "to_user_id": to_user_id,
+            "file_name": file_name,
+            "context_token_len": len(context_token or ""),
+            "item_count": len(items),
+            "file_item_keys": sorted(list(((items[-1].get("file_item") or {}).keys()))),
+            "media_keys": sorted(list((((items[-1].get("file_item") or {}).get("media") or {}).keys()))),
+            "file_len": str(uploaded.file_size),
+            "ciphertext_size": uploaded.file_size_ciphertext,
+        }, trace_id=f"wxfile-{uploaded.filekey[:8]}")
+        # #endregion
         return self._send_items(token, to_user_id, items, context_token)
 
     def _send_items(self, token: str, to_user_id: str, items: list[dict[str, Any]], context_token: str) -> dict[str, Any]:
@@ -770,6 +813,18 @@ class ILinkWeChatClient:
             },
             "base_info": {"channel_version": "trustworthy_assistant/1.0"},
         })
+        trace_id = f"wxitems-{secrets.token_hex(4)}"
+        # #region debug-point F5:send-items-request
+        _debug_emit("F5", "wechat.py:_send_items", "wechat send items request", {
+            "to_user_id": to_user_id,
+            "context_token_len": len(context_token or ""),
+            "item_types": [item.get("type") for item in items],
+            "payload_len": len(payload),
+            "file_item_keys": sorted(list((((items[-1].get("file_item") or {}).keys())))) if items and items[-1].get("type") == MESSAGE_ITEM_FILE else [],
+            "video_item_keys": sorted(list((((items[-1].get("video_item") or {}).keys())))) if items and items[-1].get("type") == MESSAGE_ITEM_VIDEO else [],
+            "image_item_keys": sorted(list((((items[-1].get("image_item") or {}).keys())))) if items and items[-1].get("type") == MESSAGE_ITEM_IMAGE else [],
+        }, trace_id=trace_id)
+        # #endregion
         response = self.client.post(
             f"{self.base_url}ilink/bot/sendmessage",
             content=payload,
@@ -778,6 +833,16 @@ class ILinkWeChatClient:
         )
         response.raise_for_status()
         parsed = response.json()
+        # #region debug-point F6:send-items-response
+        _debug_emit("F6", "wechat.py:_send_items", "wechat send items response", {
+            "to_user_id": to_user_id,
+            "status_code": response.status_code,
+            "ret": parsed.get("ret"),
+            "errcode": parsed.get("errcode"),
+            "errmsg": str(parsed.get("errmsg") or "")[:240],
+            "response_keys": sorted(list(parsed.keys()))[:20],
+        }, trace_id=trace_id)
+        # #endregion
         if int(parsed.get("ret") or 0) != 0:
             raise RuntimeError(
                 f"sendMessage ret={parsed.get('ret')} errcode={parsed.get('errcode')} errmsg={parsed.get('errmsg')}"
@@ -1157,6 +1222,18 @@ class WeChatBotRunner:
             raise RuntimeError(f"No context_token for user {user_id}, cannot send file")
         p = Path(file_path)
         media_type = _classify_media_type(p)
+        trace_id = f"wxlocal-{secrets.token_hex(4)}"
+        # #region debug-point F0:local-send-file
+        _debug_emit("F0", "wechat.py:_send_file", "local send_file requested", {
+            "file_path": str(p),
+            "file_name": p.name,
+            "file_size": p.stat().st_size,
+            "media_type": media_type,
+            "channel": channel,
+            "user_id": user_id,
+            "context_token_len": len(context_token or ""),
+        }, trace_id=trace_id)
+        # #endregion
         self.on_event(f"uploading file {p.name} ({p.stat().st_size} bytes) to CDN...")
         self._send_typing(user_id, context_token, status=1)
         try:
@@ -1310,7 +1387,7 @@ class WeChatBotRunner:
                         self.on_event(f"skip reply for {inbound.sender_id}: missing context_token")
                         continue
                     try:
-                        self._send_text_sequence(inbound.sender_id, reply, context_token, allow_split=False)
+                        self._send_text_sequence(inbound.sender_id, reply, context_token, allow_split=True)
                         self.on_event(f"sent reply to {inbound.sender_id}")
                     except Exception as exc:
                         self.on_event(f"failed to send reply to {inbound.sender_id}: {exc}")

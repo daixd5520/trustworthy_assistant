@@ -29,7 +29,13 @@ class ProgressTracker:
     emitted_count: int = 0
     max_updates: int = 2
 
+    def _suppress_progress_updates(self) -> bool:
+        text = (self.user_input or "").strip()
+        return "图片" in text and "本地路径" in text
+
     def next_note(self, normalized, tool_roundtrips: int) -> str:
+        if self._suppress_progress_updates():
+            return ""
         if self.emitted_count >= self.max_updates:
             return ""
         explicit = self._compact_text("".join(block.text for block in normalized.texts).strip())
@@ -93,6 +99,15 @@ class ProgressTracker:
 
     def _subject_hint(self) -> str:
         text = (self.user_input or "").strip()
+        if "图片" in text and "本地路径" in text:
+            multi_match = re.search(r"发送了\s+(\d+)\s+张图片", text)
+            if multi_match:
+                try:
+                    if int(multi_match.group(1)) > 1:
+                        return "这些图片"
+                except ValueError:
+                    pass
+            return "这张图片"
         path_match = re.search(r"(`[^`]+`|/[^\s]+|[A-Za-z0-9_./-]+\.[A-Za-z0-9]+)", text)
         if path_match:
             return path_match.group(1).strip("`")

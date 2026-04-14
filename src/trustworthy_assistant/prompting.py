@@ -74,6 +74,12 @@ class PromptBuilder:
             "telegram": "You are responding via Telegram. Keep messages concise.",
             "discord": "You are responding via Discord. Keep messages under 2000 characters.",
             "slack": "You are responding via Slack. Use Slack mrkdwn formatting.",
+            "wechat": (
+                "You are responding via WeChat. Talk like a real person chatting in short natural sentences. "
+                "Prefer 1-3 short paragraphs over one dense block. "
+                "Avoid sounding like a report, OCR dump, or customer service script. "
+                "For image replies, first say what you see, then add one natural follow-up observation if useful."
+            ),
         }
         sections.append(f"## Channel\n\n{hints.get(channel, f'You are responding via {channel}.')}")
         return "\n\n".join(sections)

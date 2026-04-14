@@ -41,7 +41,7 @@
 
 ## Follow-up Session
 
-- Status: [OPEN]
+- Status: [RESOLVED]
 - Started At: 2026-04-14
 - Scope:
   - `read_image` 在当前 MiniMax M2.7 接入下无法识别图片
@@ -60,6 +60,29 @@
 - 记录图片本地路径、媒体类型与文件大小，确认工具拿到的是有效图片
 - 记录 MiniMax 视觉调用的请求模式与错误摘要
 - 对照用户提供的线索，确认是否需要兼容 `MiniMax-M2.7` / `MiniMax-M2.7-highspeed`
+
+## Latest Evidence
+
+- 现有 `trae-debug-log-vision-read-image.ndjson` 只有一组 `pre-fix` 记录，仍显示 `request_mode = openai-chat-completions-image_url-data-uri`。
+- 目前还没有任何证据表明用户本轮“还是不行”对应的是修改后的 `inline-base64-text` 分支。
+- 下一步需要补充最小埋点，明确记录当前代码版本标记、请求模式，以及是否命中新的 MiniMax 分支，然后要求用户在重启 bot 后复现一次。
+- 官方 `OpenAI API 兼容` 页面仅列出 `MiniMax-M2.7/M2.5/M2.1/M2` 等文本模型，不包含 `MiniMax-VL-01`；官方 `Anthropic API 兼容` 页面还明确说明 `messages` 不支持 `image` 输入。
+- 运行时直连验证结果：
+  - `MiniMax-M2.7 + image_url` 返回 200，但正文明确说“没有看到图片”。
+  - `MiniMax-VL-01 + image_url` 使用当前 key 返回 400：`unknown model 'MiniMax-VL-01'`。
+- 结论：当前这把 key/模型权限下，不能把 `MiniMax-M2.7` 当成视觉模型；要实现看图，必须走独立视觉模型配置，并提供对 `MiniMax-VL-01` 可见的 key。
+- 新证据：通过官方 `mmx` CLI 路线，使用同一把 `.env` 中的 key 可以成功执行 `vision describe`。
+- 已实现最小修复：`read_image` 对 MiniMax 相关配置优先调用 `python3 .dbg/mmx_from_env.py vision describe ...`，并在本地直接调用 `ToolRegistry.read_image()` 验证成功，返回正常中文图片描述。
+- 新证据（微信播报异常）：
+  - `wechat.py:_build_turn_input` 会把 `图片 N 本地路径：/Users/...jpg` 写进 turn_input。
+  - `runtime/turns.py:ProgressTracker._subject_hint()` 会优先从 user_input 中匹配路径。
+  - 实际发送日志已证明首条进度播报被拼成 `我先把/Users/...jpg的脉络捋一下。`
+- 最小修复方向：保留图片本地路径给工具使用，但在进度播报阶段对图片路径做语义化降级，不再向用户暴露本地文件路径。
+- 新证据（最终回复未切分）：
+  - `wechat.py:run_forever` 在发送最终回复时固定调用 `_send_text_sequence(..., allow_split=False)`。
+  - `_split_text_for_delivery()` 本身具备按句号、段落拆分短消息的能力，但被上述固定参数绕过。
+- 最小修复方向：保留 `_split_text_for_delivery()` 现有规则，只把最终回复发送改为 `allow_split=True`，让微信端按短句拆成多条自然消息。
+- 用户最终确认：线上 bot 已恢复正常识图。
 
 ---
 
@@ -89,3 +112,34 @@
 - 记录一次 turn 内是否触发了 progress reply 与 final reply，以及两者的文本摘要
 - 记录最终发送前的分段结果，确认是否是切分造成“近义双句”
 - 复现一次引用消息，基于日志判断是“模型生成重复”还是“发送链路重复”
+
+---
+
+# Debug Session
+
+- Status: [OPEN]
+- Started At: 2026-04-14
+- Scope:
+  - 微信发送文件后可见但无法下载/预览
+  - 用户发送图片后本地显示文件存在，但上层无法解析图片内容
+- Symptoms:
+  - 用户反馈发送出去的文件在微信里“能看到文件”，但不能下载，也不能预览
+  - 用户发送图片后，系统提示文件已存在，但无法解析内容
+- Guardrails:
+  - 在拿到运行时证据前，不修改业务逻辑
+  - 第一处代码变更仅用于埋点和证据收集
+
+## Hypotheses
+
+1. `send_file()` 构造的 `file_item` 字段缺少微信客户端下载/预览所需的关键元数据，导致消息可见但附件不可用。
+2. 入站图片的 `encrypt_query_param` 或 AES key 提取字段不完整，当前代码下载或解密出的字节流不是原图，所以本地虽有文件但内容损坏。
+3. 微信入站图片与出站文件的 CDN 协议格式存在差异，当前 `download_cdn_media()` / 解密逻辑不能直接复用到实际收到的图片。
+4. 图片落地文件的后缀、MIME 或文件头判断错误，导致上层 `read_image` 没有把它当成可读图片。
+5. 当前运行中的 bot 不是最新代码，或运行环境依赖/配置与仓库不一致，导致现象和代码阅读结果不一致。
+
+## Evidence Plan
+
+- 检查现有 `.dbg` 日志与本地落地图像文件头，确认图片是“下载失败”“解密失败”还是“落地后识别失败”
+- 检查当前 `file_item` / `image_item` 负载与历史埋点，确认发送链路是否缺字段或字段格式不对
+- 如现有证据不够，只补最小埋点到入站图片提取、下载解密、出站文件发送三处
+- 复现一次“发文件”和“一张图片给 bot”，对照 pre-fix 日志后再决定最小修复
