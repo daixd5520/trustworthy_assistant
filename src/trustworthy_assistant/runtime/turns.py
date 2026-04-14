@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 import re
+import time
 from typing import Callable, Optional
 
 from trustworthy_assistant.providers.normalization import normalize_response
@@ -180,6 +181,73 @@ class TurnProcessor:
         self.session_manager = session_manager
         self.model_id = model_id
 
+    @staticmethod
+    def _should_retry_provider_error(exc: Exception) -> bool:
+        message = str(exc).lower()
+        retry_markers = (
+            "error code 500",
+            "unknown error 520",
+            "internal server error",
+            "server error",
+            "gateway",
+            "timeout",
+            "timed out",
+            "connection reset",
+            "temporarily unavailable",
+            "overloaded",
+        )
+        return any(marker in message for marker in retry_markers)
+
+    def _create_message_with_retry(self, *, model: str, system_prompt: str, messages, max_attempts: int = 3):
+        last_exc: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return self.client.messages.create(
+                    model=model,
+                    max_tokens=8096,
+                    system=system_prompt,
+                    tools=self.tool_registry.tools,
+                    messages=messages,
+                )
+            except Exception as exc:
+                last_exc = exc
+                if attempt >= max_attempts or not self._should_retry_provider_error(exc):
+                    raise
+                time.sleep(0.8 * attempt)
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("provider request failed without exception detail")
+
+    def _stream_message_with_retry(self, *, model: str, system_prompt: str, messages, on_text: Optional[Callable[[str], None]], max_attempts: int = 3):
+        last_exc: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            current_text = ""
+            try:
+                with self.client.messages.stream(
+                    model=model,
+                    max_tokens=8096,
+                    system=system_prompt,
+                    tools=self.tool_registry.tools,
+                    messages=messages,
+                ) as stream:
+                    for event in stream:
+                        if event.type == "content_block_delta" and event.delta.type == "text_delta":
+                            text = event.delta.text
+                            current_text += text
+                            if on_text:
+                                on_text(text)
+                    response = stream.get_final_message()
+                return response, current_text
+            except Exception as exc:
+                last_exc = exc
+                # Once partial output has been emitted, do not retry or we may duplicate content.
+                if current_text or attempt >= max_attempts or not self._should_retry_provider_error(exc):
+                    raise
+                time.sleep(0.8 * attempt)
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("provider stream failed without exception detail")
+
     def build_memory_context(self, user_message: str) -> str:
         results = self.memory_service.hybrid_search(user_message, top_k=3)
         if not results:
@@ -256,11 +324,9 @@ class TurnProcessor:
         progress_tracker = ProgressTracker(user_input)
         while True:
             try:
-                response = self.client.messages.create(
+                response = self._create_message_with_retry(
                     model=agent.model_override or self.model_id,
-                    max_tokens=8096,
-                    system=system_prompt,
-                    tools=self.tool_registry.tools,
+                    system_prompt=system_prompt,
                     messages=session.messages,
                 )
             except Exception as exc:
@@ -389,22 +455,13 @@ class TurnProcessor:
         
         while True:
             try:
-                with self.client.messages.stream(
+                response, current_text = self._stream_message_with_retry(
                     model=agent.model_override or self.model_id,
-                    max_tokens=8096,
-                    system=system_prompt,
-                    tools=self.tool_registry.tools,
+                    system_prompt=system_prompt,
                     messages=session.messages,
-                ) as stream:
-                    current_text = ""
-                    for event in stream:
-                        if event.type == "content_block_delta" and event.delta.type == "text_delta":
-                            text = event.delta.text
-                            current_text += text
-                            full_text += text
-                            if on_text:
-                                on_text(text)
-                    response = stream.get_final_message()
+                    on_text=on_text,
+                )
+                full_text += current_text
             except Exception as exc:
                 errors.append(str(exc))
                 result = TurnResult(

@@ -263,6 +263,7 @@ class IncomingWeChatImage:
     file_name: str = ""
     mime_type: str = ""
     local_path: str = ""
+    is_quoted: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -419,20 +420,62 @@ def _text_from_item_list(item_list: Any) -> str:
     return "\n".join(texts).strip()
 
 
+def _text_from_message_item(item: Any) -> str:
+    if not isinstance(item, dict):
+        return ""
+    item_type = int(item.get("type") or 0)
+    if item_type == MESSAGE_ITEM_TEXT:
+        return str((item.get("text_item") or {}).get("text") or "").strip()
+    if item_type == MESSAGE_ITEM_VOICE:
+        return str((item.get("voice_item") or {}).get("text") or "").strip()
+    item_list = item.get("item_list")
+    if isinstance(item_list, list):
+        return _text_from_item_list(item_list)
+    return ""
+
+
+def _reference_payload_from_item(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    containers = [
+        item,
+        item.get("text_item"),
+        item.get("voice_item"),
+        item.get("image_item"),
+        item.get("file_item"),
+        item.get("video_item"),
+    ]
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        for key in ("ref_msg", "refer_msg", "quote_msg", "quoted_msg", "reply_msg", "reference"):
+            value = container.get(key)
+            if isinstance(value, dict):
+                return value
+    return None
+
+
 def _extract_reference_from_item_list(item_list: Any) -> IncomingWeChatReference | None:
     if not isinstance(item_list, list):
         return None
     for item in item_list:
-        ref = (item or {}).get("ref_msg")
-        if not isinstance(ref, dict):
+        ref = _reference_payload_from_item(item)
+        if ref is None:
             continue
-        text = _text_from_item_list(ref.get("item_list"))
+        ref_item = ref.get("message_item")
+        text = _text_from_message_item(ref_item)
+        if not text:
+            text = _text_from_item_list(ref.get("item_list"))
         if not text:
             candidates = [
                 ref.get("text"),
                 ref.get("content"),
                 ref.get("title"),
                 ref.get("summary"),
+                ref.get("desc"),
+                ref.get("digest"),
+                ref.get("message"),
+                ref.get("reply_content"),
             ]
             text = next((str(value).strip() for value in candidates if str(value or "").strip()), "")
         return IncomingWeChatReference(
@@ -444,33 +487,44 @@ def _extract_reference_from_item_list(item_list: Any) -> IncomingWeChatReference
     return None
 
 
+def _append_image_from_item(images: list[IncomingWeChatImage], item: Any, *, is_quoted: bool) -> None:
+    if int((item or {}).get("type") or 0) != MESSAGE_ITEM_IMAGE:
+        return
+    image_item = (item or {}).get("image_item") or {}
+    media = image_item.get("media") or {}
+    encrypt_query_param = str(media.get("encrypt_query_param") or image_item.get("encrypt_query_param") or "").strip()
+    aes_key_b64 = str(
+        image_item.get("aeskey")
+        or media.get("aes_key")
+        or image_item.get("aes_key")
+        or ""
+    ).strip()
+    if not encrypt_query_param or not aes_key_b64:
+        return
+    images.append(
+        IncomingWeChatImage(
+            encrypt_query_param=encrypt_query_param,
+            aes_key_b64=aes_key_b64,
+            file_name=str(image_item.get("file_name") or image_item.get("name") or "").strip(),
+            mime_type=str(image_item.get("mime_type") or image_item.get("content_type") or "").strip(),
+            is_quoted=is_quoted,
+            raw=image_item if isinstance(image_item, dict) else {},
+        )
+    )
+
+
 def _extract_images_from_item_list(item_list: Any) -> list[IncomingWeChatImage]:
     if not isinstance(item_list, list):
         return []
     images: list[IncomingWeChatImage] = []
     for item in item_list:
-        if int((item or {}).get("type") or 0) != MESSAGE_ITEM_IMAGE:
+        _append_image_from_item(images, item, is_quoted=False)
+        ref = _reference_payload_from_item(item)
+        if not isinstance(ref, dict):
             continue
-        image_item = (item or {}).get("image_item") or {}
-        media = image_item.get("media") or {}
-        encrypt_query_param = str(media.get("encrypt_query_param") or image_item.get("encrypt_query_param") or "").strip()
-        aes_key_b64 = str(
-            image_item.get("aeskey")
-            or media.get("aes_key")
-            or image_item.get("aes_key")
-            or ""
-        ).strip()
-        if not encrypt_query_param or not aes_key_b64:
-            continue
-        images.append(
-            IncomingWeChatImage(
-                encrypt_query_param=encrypt_query_param,
-                aes_key_b64=aes_key_b64,
-                file_name=str(image_item.get("file_name") or image_item.get("name") or "").strip(),
-                mime_type=str(image_item.get("mime_type") or image_item.get("content_type") or "").strip(),
-                raw=image_item if isinstance(image_item, dict) else {},
-            )
-        )
+        ref_item = ref.get("message_item")
+        if isinstance(ref_item, dict):
+            _append_image_from_item(images, ref_item, is_quoted=True)
     return images
 
 
@@ -495,6 +549,16 @@ def _guess_image_media_type(image_bytes: bytes, fallback: str = "") -> tuple[str
         }.get(fallback, "")
         return fallback, ext
     return fallback, ""
+
+
+def _build_user_facing_error_reply(errors: list[str]) -> str:
+    combined = " | ".join((item or "").strip() for item in errors if (item or "").strip())
+    lowered = combined.lower()
+    if any(marker in lowered for marker in ("error code 500", "unknown error 520", "internal server error", "server error", "gateway", "overloaded")):
+        return "抱歉，刚刚请求模型服务时临时失败了。请稍后再试一次。"
+    if any(marker in lowered for marker in ("timeout", "timed out", "connection reset", "network")):
+        return "抱歉，刚刚和模型服务通信超时了。请稍后再试一次。"
+    return "抱歉，刚刚处理这条消息时出了点问题。请稍后再试一次。"
 
 
 def _decode_wechat_aes_key(raw_value: str) -> bytes:
@@ -1088,19 +1152,31 @@ class WeChatBotRunner:
                 quoted_label = f"这条微信消息带有引用，原发送者是 {inbound.quoted.sender_id}。"
             lines.append(quoted_label)
             if inbound.quoted.text:
-                lines.append(f"引用内容：{inbound.quoted.text}")
+                lines.append(f"被引用的上一条消息：{inbound.quoted.text}")
+                lines.append("请把当前消息理解为用户对这段被引用内容的追问、补充或纠正。")
+            else:
+                lines.append("检测到引用动作，但当前没有拿到被引用消息的正文。请优先结合当前消息判断用户意图。")
         if inbound.text:
             lines.append(f"用户当前消息：{inbound.text}")
         if inbound.images:
-            lines.append(f"用户这次还发送了 {len(inbound.images)} 张图片。")
-            downloaded_count = 0
-            for index, image in enumerate(inbound.images, start=1):
-                if image.local_path:
-                    downloaded_count += 1
-                    lines.append(f"图片 {index} 本地路径：{image.local_path}")
-                else:
-                    lines.append(f"图片 {index} 已收到，但当前下载失败，暂时无法读取内容。")
-            if downloaded_count > 0:
+            current_images = [image for image in inbound.images if not image.is_quoted]
+            quoted_images = [image for image in inbound.images if image.is_quoted]
+            if current_images:
+                lines.append(f"用户这次还发送了 {len(current_images)} 张图片。")
+                for index, image in enumerate(current_images, start=1):
+                    if image.local_path:
+                        lines.append(f"当前图片 {index} 本地路径：{image.local_path}")
+                    else:
+                        lines.append(f"当前图片 {index} 已收到，但当前下载失败，暂时无法读取内容。")
+            if quoted_images:
+                lines.append(f"被引用的上一条消息里还包含 {len(quoted_images)} 张图片。")
+                for index, image in enumerate(quoted_images, start=1):
+                    if image.local_path:
+                        lines.append(f"被引用图片 {index} 本地路径：{image.local_path}")
+                    else:
+                        lines.append(f"被引用图片 {index} 已收到，但当前下载失败，暂时无法读取内容。")
+            downloadable_images = [image for image in inbound.images if image.local_path]
+            if downloadable_images:
                 lines.append("如果需要理解图片，请使用 `read_image` 工具读取这些图片，再结合当前消息和引用内容回答。")
             else:
                 lines.append("不要说未收到图片；应说明图片已收到，但当前还无法读取其内容。")
@@ -1379,7 +1455,10 @@ class WeChatBotRunner:
                     }, trace_id=trace_id)
                     # #endregion
                     if result.errors:
-                        reply = f"处理消息时出错: {'; '.join(result.errors)}"
+                        self.on_event(
+                            f"turn processing failed for {inbound.sender_id}: {'; '.join(result.errors)}"
+                        )
+                        reply = _build_user_facing_error_reply(result.errors)
                     if not reply:
                         continue
                     context_token = inbound.context_token or self._context_tokens.get(inbound.sender_id, "")
