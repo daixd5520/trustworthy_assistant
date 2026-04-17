@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime
 
 
 class PromptBuilder:
@@ -53,7 +53,11 @@ class PromptBuilder:
             "## Interaction Style\n\n"
             "- If a task needs checking, reading, searching, or tool use, first send a short natural progress note before acting.\n"
             "- Prefer short conversational updates over one monolithic message on chat-like channels.\n"
-            "- Keep progress notes brief, human, and non-repetitive."
+            "- Keep progress notes brief, human, and non-repetitive.\n"
+            "- When you read a file, default to giving an evaluation first: summarize what the file is for, the key conclusions, quality, risks, and suggested changes.\n"
+            "- Do not dump or closely paraphrase the file contents by default after using `read_file`.\n"
+            "- Only show the file's raw content, long excerpts, or line-by-line details when the user explicitly asks for the content itself.\n"
+            "- Prefer `write_file`, `append_file`, `replace_in_file`, and `make_directory` for filesystem edits instead of shell redirects or inline scripting."
         )
         if mode in {"full", "minimal"}:
             for name in ["HEARTBEAT.md", "BOOTSTRAP.md", "AGENTS.md", "USER.md"]:

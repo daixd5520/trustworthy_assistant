@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 from openai import OpenAI
 
+from trustworthy_assistant.bookkeeping import BookkeepingService
 from trustworthy_assistant.memory.service import TrustworthyMemoryService
 from trustworthy_assistant.supervisor.models import ReviewFinding, Severity, TaskPhase
 
@@ -150,10 +151,8 @@ def _resolve_safe_path(path: str, workspace_dir: Path) -> Path:
         except ValueError:
             if candidate == blocked or blocked in candidate.parents:
                 raise ValueError(f"Access denied: {path} is inside a protected directory")
-    if not candidate.exists():
-        return candidate
     try:
-        candidate.resolve().relative_to(_HOME)
+        candidate.relative_to(_HOME)
     except ValueError:
         if candidate != _HOME and _HOME not in candidate.parents:
             raise ValueError(f"Access denied: {path} is outside home directory")
@@ -164,6 +163,7 @@ class ToolRegistry:
     def __init__(
         self,
         memory_service: TrustworthyMemoryService,
+        bookkeeping_service: BookkeepingService,
         on_tool: Callable[[str, str], None] | None = None,
         reminder_callback: Callable[[str, int, str, str], None] | None = None,
         file_sender: Callable[[str, str, str], None] | None = None,
@@ -179,6 +179,7 @@ class ToolRegistry:
         state_dir: Path | None = None,
     ) -> None:
         self.memory_service = memory_service
+        self.bookkeeping_service = bookkeeping_service
         self.on_tool = on_tool
         self.reminder_callback = reminder_callback
         self.file_sender = file_sender
@@ -241,6 +242,53 @@ class ToolRegistry:
                 },
             },
             {
+                "name": "ledger_add_entry",
+                "description": "Add one bookkeeping entry to the local ledger for the current user. Use for expenses, income, reimbursements, and transfers that should be tracked.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "amount": {"type": "number", "description": "Positive amount, such as 32.5."},
+                        "category": {"type": "string", "description": "Category like food, transport, rent, shopping, salary, or reimbursement."},
+                        "entry_type": {"type": "string", "description": "Either `expense` or `income`. Default: `expense`."},
+                        "note": {"type": "string", "description": "Optional note, merchant, or context for the entry."},
+                        "occurred_at": {"type": "string", "description": "Optional ISO datetime for when the transaction happened. Default: now."},
+                        "currency": {"type": "string", "description": "Currency code like CNY, USD. Default: CNY."},
+                        "account": {"type": "string", "description": "Optional account name like cash, wechat, alipay, bank_card."},
+                        "source": {"type": "string", "description": "Optional source label, such as wechat, manual, reimbursement."},
+                    },
+                    "required": ["amount", "category"],
+                },
+            },
+            {
+                "name": "ledger_report",
+                "description": "Generate a bookkeeping report with totals and category stats. Use when the user asks for today's, this week's, last week's, this month's, or last month's账本/账单/统计.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "period": {"type": "string", "description": "One of: today, yesterday, week, last_week, month, last_month."},
+                        "tz": {"type": "string", "description": "Optional timezone name. Default: Local."},
+                    },
+                    "required": ["period"],
+                },
+            },
+            {
+                "name": "ledger_configure_reports",
+                "description": "Configure automatic ledger reports for the current user and channel. Use when the user asks for daily, weekly, or monthly账单推送.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "daily_enabled": {"type": "boolean", "description": "Whether to enable the daily report. Default: true."},
+                        "weekly_enabled": {"type": "boolean", "description": "Whether to enable the weekly report. Default: true."},
+                        "monthly_enabled": {"type": "boolean", "description": "Whether to enable the monthly report. Default: true."},
+                        "daily_time": {"type": "string", "description": "HH:MM local time for the daily report. Default: 23:00."},
+                        "weekly_time": {"type": "string", "description": "HH:MM local time for the weekly report. Default: 23:00."},
+                        "monthly_time": {"type": "string", "description": "HH:MM local time for the monthly report. Default: 00:05."},
+                        "weekly_weekday": {"type": "string", "description": "sun, mon, tue, wed, thu, fri, or sat. Default: sun."},
+                        "tz": {"type": "string", "description": "Timezone name. Default: Local."},
+                    },
+                },
+            },
+            {
                 "name": "list_directory",
                 "description": "List files and directories. Supports workspace-relative paths, absolute paths, and ~/ paths. Access is limited to your home directory with system directories blocked.",
                 "input_schema": {
@@ -252,12 +300,64 @@ class ToolRegistry:
             },
             {
                 "name": "read_file",
-                "description": "Read a text file. Supports workspace-relative paths, absolute paths, and ~/ paths. Access is limited to your home directory with system directories blocked.",
+                "description": "Read a text file so you can analyze it before answering. Supports workspace-relative paths, absolute paths, and ~/ paths. Access is limited to your home directory with system directories blocked. After reading, default to summarizing and evaluating the file instead of quoting its contents unless the user explicitly asks to see the content.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "File path. Can be relative (workspace), absolute (/Users/...), or home-relative (~/Documents/notes.txt)."},
                         "max_chars": {"type": "integer", "description": "Max characters to return. Default: 4000."},
+                    },
+                    "required": ["path"],
+                },
+            },
+            {
+                "name": "write_file",
+                "description": "Create or overwrite a text file on the local filesystem. Use this instead of shell redirection when you need to write code, config, notes, or other text files.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Target file path. Supports workspace-relative, absolute, and ~/ paths."},
+                        "content": {"type": "string", "description": "The full text content to write."},
+                        "overwrite": {"type": "boolean", "description": "Whether to overwrite an existing file. Default: true."},
+                        "create_parent_dirs": {"type": "boolean", "description": "Whether to create missing parent directories automatically. Default: true."},
+                    },
+                    "required": ["path", "content"],
+                },
+            },
+            {
+                "name": "append_file",
+                "description": "Append text to a local file. Use for logs, notes, markdown, or incremental text output without relying on shell redirects.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Target file path. Supports workspace-relative, absolute, and ~/ paths."},
+                        "content": {"type": "string", "description": "Text to append."},
+                        "create_parent_dirs": {"type": "boolean", "description": "Whether to create missing parent directories automatically. Default: true."},
+                    },
+                    "required": ["path", "content"],
+                },
+            },
+            {
+                "name": "replace_in_file",
+                "description": "Edit an existing text file by replacing a target string. Use this for focused updates without rewriting the whole file.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Existing file path. Supports workspace-relative, absolute, and ~/ paths."},
+                        "old_text": {"type": "string", "description": "Exact text to find."},
+                        "new_text": {"type": "string", "description": "Replacement text."},
+                        "replace_all": {"type": "boolean", "description": "Whether to replace all matches. Default: false."},
+                    },
+                    "required": ["path", "old_text", "new_text"],
+                },
+            },
+            {
+                "name": "make_directory",
+                "description": "Create a directory on the local filesystem, including parent directories if needed.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Directory path. Supports workspace-relative, absolute, and ~/ paths."},
                     },
                     "required": ["path"],
                 },
@@ -321,8 +421,15 @@ class ToolRegistry:
         self.handlers: dict[str, Callable[..., str]] = {
             "memory_write": self.memory_write,
             "memory_search": self.memory_search,
+            "ledger_add_entry": self.ledger_add_entry,
+            "ledger_report": self.ledger_report,
+            "ledger_configure_reports": self.ledger_configure_reports,
             "list_directory": self.list_directory,
             "read_file": self.read_file,
+            "write_file": self.write_file,
+            "append_file": self.append_file,
+            "replace_in_file": self.replace_in_file,
+            "make_directory": self.make_directory,
             "get_current_time": self.get_current_time,
             "set_reminder": self.set_reminder,
             "send_file": self.send_file,
@@ -440,6 +547,119 @@ class ToolRegistry:
             f"[{item['path']}] (score: {item['score']}, status: {item['status']}) {item['snippet']}"
             for item in results
         )
+
+    def ledger_add_entry(
+        self,
+        amount: float,
+        category: str,
+        entry_type: str = "expense",
+        note: str = "",
+        occurred_at: str = "",
+        currency: str = "CNY",
+        account: str = "cash",
+        source: str = "manual",
+    ) -> str:
+        detail = f"{entry_type} {amount} {currency} {category}"
+        self.emit("ledger_add_entry", detail)
+        try:
+            entry = self.bookkeeping_service.add_entry(
+                amount=amount,
+                category=category,
+                entry_type=entry_type,
+                note=note,
+                occurred_at=occurred_at,
+                currency=currency,
+                account=account,
+                source=source,
+                channel=self._current_channel,
+                user_id=self._current_user_id,
+            )
+        except Exception as exc:
+            return f"Error: Failed to add ledger entry: {exc}"
+        note_part = f" | note={entry.note}" if entry.note else ""
+        return (
+            f"Ledger entry saved: id={entry.entry_id} type={entry.entry_type} "
+            f"amount={entry.amount} {entry.currency} category={entry.category} "
+            f"occurred_at={entry.occurred_at}{note_part}"
+        )
+
+    def ledger_report(self, period: str, tz: str = "Local") -> str:
+        self.emit("ledger_report", f"{period} tz={tz}")
+        try:
+            report = self.bookkeeping_service.summarize(period, tz_name=tz)
+        except Exception as exc:
+            return f"Error: Failed to build ledger report: {exc}"
+        lines = [
+            f"{report['label']}",
+            f"Range: {report['start_at']} -> {report['end_at']}",
+            f"Entries: {report['entry_count']}",
+            f"Expense total: {report['expense_total']}",
+            f"Income total: {report['income_total']}",
+            f"Net total: {report['net_total']}",
+        ]
+        expense_rows = report.get("expense_by_category") or []
+        income_rows = report.get("income_by_category") or []
+        if expense_rows:
+            lines.append("Expense by category:")
+            lines.extend(f"- {row['category']}: {row['amount']}" for row in expense_rows[:8])
+        if income_rows:
+            lines.append("Income by category:")
+            lines.extend(f"- {row['category']}: {row['amount']}" for row in income_rows[:8])
+        entries = report.get("entries") or []
+        if entries:
+            lines.append("Recent entries:")
+            for row in entries[:12]:
+                note_part = f" | {row['note']}" if row.get("note") else ""
+                lines.append(
+                    f"- {row['occurred_at']} | {row['entry_type']} | {row['amount']} {row['currency']} | {row['category']}{note_part}"
+                )
+        else:
+            lines.append("No ledger entries in this period.")
+        return "\n".join(lines)
+
+    def ledger_configure_reports(
+        self,
+        daily_enabled: bool = True,
+        weekly_enabled: bool = True,
+        monthly_enabled: bool = True,
+        daily_time: str = "23:00",
+        weekly_time: str = "23:00",
+        monthly_time: str = "00:05",
+        weekly_weekday: str = "sun",
+        tz: str = "Local",
+    ) -> str:
+        self.emit(
+            "ledger_configure_reports",
+            (
+                f"daily={daily_enabled}@{daily_time} weekly={weekly_enabled}@{weekly_time}/{weekly_weekday} "
+                f"monthly={monthly_enabled}@{monthly_time} tz={tz}"
+            ),
+        )
+        if not self._current_channel or not self._current_user_id:
+            return "Error: Missing current channel or user context for scheduled delivery."
+        try:
+            jobs = self.bookkeeping_service.configure_report_jobs(
+                channel=self._current_channel,
+                user_id=self._current_user_id,
+                tz_name=tz,
+                daily_enabled=daily_enabled,
+                weekly_enabled=weekly_enabled,
+                monthly_enabled=monthly_enabled,
+                daily_time=daily_time,
+                weekly_time=weekly_time,
+                monthly_time=monthly_time,
+                weekly_weekday=weekly_weekday,
+            )
+        except Exception as exc:
+            return f"Error: Failed to configure ledger reports: {exc}"
+        lines = ["Ledger auto reports configured:"]
+        for job in jobs:
+            schedule = job.get("schedule") or {}
+            lines.append(
+                f"- {job.get('id')}: enabled={job.get('enabled')} expr={schedule.get('expr')} tz={schedule.get('tz')}"
+            )
+        lines.append("The scheduler will pick up the updated CRON.json automatically on the next reload cycle.")
+        return "\n".join(lines)
 
     def list_directory(self, path: str = ".") -> str:
         self.emit("list_directory", path)
@@ -584,6 +804,87 @@ class ToolRegistry:
             )
         text = raw.decode("utf-8", errors="replace")
         return _truncate_text(text, max_chars)
+
+    def write_file(
+        self,
+        path: str,
+        content: str,
+        overwrite: bool = True,
+        create_parent_dirs: bool = True,
+    ) -> str:
+        self.emit("write_file", path)
+        try:
+            target = _resolve_safe_path(path, self.workspace_dir)
+            parent = target.parent
+            if create_parent_dirs:
+                parent.mkdir(parents=True, exist_ok=True)
+            elif not parent.is_dir():
+                return f"Error: Parent directory does not exist: {parent}"
+            if target.exists() and target.is_dir():
+                return f"Error: Path is a directory: {target}"
+            if target.exists() and not overwrite:
+                return f"Error: File already exists: {target}"
+            target.write_text(str(content), encoding="utf-8")
+            return f"Wrote file: {target} ({len(str(content))} chars)"
+        except Exception as exc:
+            return f"Error: Failed to write file: {exc}"
+
+    def append_file(
+        self,
+        path: str,
+        content: str,
+        create_parent_dirs: bool = True,
+    ) -> str:
+        self.emit("append_file", path)
+        try:
+            target = _resolve_safe_path(path, self.workspace_dir)
+            parent = target.parent
+            if create_parent_dirs:
+                parent.mkdir(parents=True, exist_ok=True)
+            elif not parent.is_dir():
+                return f"Error: Parent directory does not exist: {parent}"
+            if target.exists() and target.is_dir():
+                return f"Error: Path is a directory: {target}"
+            with target.open("a", encoding="utf-8") as handle:
+                handle.write(str(content))
+            return f"Appended to file: {target} (+{len(str(content))} chars)"
+        except Exception as exc:
+            return f"Error: Failed to append file: {exc}"
+
+    def replace_in_file(
+        self,
+        path: str,
+        old_text: str,
+        new_text: str,
+        replace_all: bool = False,
+    ) -> str:
+        self.emit("replace_in_file", path)
+        if not old_text:
+            return "Error: old_text must not be empty."
+        try:
+            target = _resolve_safe_path(path, self.workspace_dir)
+            if not target.exists():
+                return f"Error: File not found: {target}"
+            if target.is_dir():
+                return f"Error: Path is a directory: {target}"
+            original = target.read_text(encoding="utf-8")
+            if old_text not in original:
+                return "Error: Target text not found in file."
+            count = original.count(old_text) if replace_all else 1
+            updated = original.replace(old_text, new_text) if replace_all else original.replace(old_text, new_text, 1)
+            target.write_text(updated, encoding="utf-8")
+            return f"Updated file: {target} ({count} replacement{'s' if count != 1 else ''})"
+        except Exception as exc:
+            return f"Error: Failed to replace text in file: {exc}"
+
+    def make_directory(self, path: str) -> str:
+        self.emit("make_directory", path)
+        try:
+            target = _resolve_safe_path(path, self.workspace_dir)
+            target.mkdir(parents=True, exist_ok=True)
+            return f"Directory ready: {target}"
+        except Exception as exc:
+            return f"Error: Failed to create directory: {exc}"
 
     def get_current_time(self) -> str:
         self.emit("get_current_time", "local")

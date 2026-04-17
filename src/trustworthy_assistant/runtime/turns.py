@@ -84,6 +84,8 @@ class ProgressTracker:
             return "act"
         if "set_reminder" in names:
             return "act"
+        if {"write_file", "append_file", "replace_in_file", "make_directory"} & names:
+            return "act"
         if "run_command" in names:
             return "verify"
         if "read_file" in names:

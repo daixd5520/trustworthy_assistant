@@ -44,6 +44,8 @@ class CronJobState:
             self.message,
             self.agent_id,
             self.delete_after_run,
+            self.channel,
+            self.sender_id,
         )
 
 
@@ -59,6 +61,7 @@ class CronScheduler:
     ) -> None:
         self.workspace_dir = Path(workspace_dir)
         self.cron_file = self.workspace_dir / "CRON.json"
+        self.state_file = self.workspace_dir / "cron_state.json"
         self.agent_registry = agent_registry
         self.turn_processor = turn_processor
         self.on_event = on_event or (lambda _message: None)
@@ -108,6 +111,12 @@ class CronScheduler:
                     job._next_run_dt = existing._next_run_dt
                     job.next_run_at = existing.next_run_at
                 else:
+                    saved = self._load_job_state(job.job_id)
+                    if saved:
+                        job.last_run_at = saved.get("last_run_at", "")
+                        job.last_status = saved.get("last_status", "idle")
+                        job.last_error = saved.get("last_error", "")
+                        job.last_result_preview = saved.get("last_result_preview", "")
                     job._next_run_dt = self._compute_next_run(job, now)
                     job.next_run_at = job._next_run_dt.isoformat() if job._next_run_dt else ""
                 updated[job.job_id] = job
@@ -132,6 +141,8 @@ class CronScheduler:
                     "last_status": job.last_status,
                     "last_error": job.last_error,
                     "delete_after_run": job.delete_after_run,
+                    "channel": job.channel,
+                    "sender_id": job.sender_id,
                 }
                 for job in self._jobs.values()
             ]
@@ -277,6 +288,8 @@ class CronScheduler:
             job.last_status = status
             job.last_error = error
             job.last_result_preview = preview
+            last_run_at = job.last_run_at
+        self._save_job_state(job_id, status, error, preview, last_run_at)
 
     def _build_job_state(self, raw: dict) -> CronJobState:
         schedule = raw.get("schedule") or {}
@@ -292,6 +305,8 @@ class CronScheduler:
             agent_id=str(payload.get("agent_id") or "").strip(),
             delete_after_run=bool(raw.get("delete_after_run", False)),
             raw=raw,
+            channel=str(raw.get("channel") or payload.get("channel") or "").strip(),
+            sender_id=str(raw.get("sender_id") or payload.get("sender_id") or "").strip(),
         )
 
     def _compute_next_run(self, job: CronJobState, base_utc: datetime) -> datetime | None:
@@ -313,6 +328,33 @@ class CronScheduler:
         except ZoneInfoNotFoundError:
             return timezone.utc
 
+    def _save_job_state(self, job_id: str, status: str, error: str, preview: str, last_run_at: str) -> None:
+        try:
+            data: dict[str, dict] = {}
+            if self.state_file.is_file():
+                try:
+                    data = json.loads(self.state_file.read_text(encoding="utf-8"))
+                except Exception:
+                    data = {}
+            data[job_id] = {
+                "last_run_at": last_run_at,
+                "last_status": status,
+                "last_error": error,
+                "last_result_preview": preview,
+            }
+            self.state_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:
+            self.on_event(f"failed to save cron state for {job_id}: {exc}")
+
+    def _load_job_state(self, job_id: str) -> dict | None:
+        if not self.state_file.is_file():
+            return None
+        try:
+            data = json.loads(self.state_file.read_text(encoding="utf-8"))
+            return data.get(job_id)
+        except Exception:
+            return None
+
     def _read_jobs_file(self) -> list[dict]:
         if not self.cron_file.is_file():
             return []
@@ -329,6 +371,20 @@ class CronScheduler:
             return
         try:
             data = json.loads(self.cron_file.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        jobs = data.get("jobs", [])
+        data["jobs"] = [j for j in jobs if j.get("id") != job_id]
+        self.cron_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Also clean up state file entry
+        if self.state_file.is_file():
+            try:
+                state_data = json.loads(self.state_file.read_text(encoding="utf-8"))
+                if job_id in state_data:
+                    del state_data[job_id]
+                    self.state_file.write_text(json.dumps(state_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
             jobs = data.get("jobs") or []
             data["jobs"] = [job for job in jobs if str(job.get("id")) != job_id]
             self.cron_file.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

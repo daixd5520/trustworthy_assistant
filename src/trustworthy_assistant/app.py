@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from anthropic import Anthropic
 
+from trustworthy_assistant.bookkeeping import BookkeepingService
 from trustworthy_assistant.bootstrap import BootstrapLoader
 from trustworthy_assistant.config import AppConfig, load_config
 from trustworthy_assistant.eval.benchmarks import BenchmarkSuite
@@ -23,6 +24,7 @@ class TrustworthyAssistantApp:
     bootstrap_loader: BootstrapLoader
     skills_catalog: SkillsCatalog
     memory_service: TrustworthyMemoryService
+    bookkeeping_service: BookkeepingService
     prompt_builder: PromptBuilder
     agent_registry: AgentRegistry
     session_manager: SessionManager
@@ -35,7 +37,7 @@ class TrustworthyAssistantApp:
     cron_scheduler: CronScheduler
 
 
-def build_app(root_dir=None, on_tool=None, on_cron_event=None) -> TrustworthyAssistantApp:
+def build_app(root_dir=None, on_tool=None, on_cron_event=None, channel_sender=None) -> TrustworthyAssistantApp:
     config = load_config(root_dir)
     memory_service = TrustworthyMemoryService(
         config.workspace_dir,
@@ -44,6 +46,7 @@ def build_app(root_dir=None, on_tool=None, on_cron_event=None) -> TrustworthyAss
         embedding_model=config.embedding_model,
         chroma_persist_dir=config.chroma_persist_dir
     )
+    bookkeeping_service = BookkeepingService(config.workspace_dir)
     config.benchmark_dir.mkdir(parents=True, exist_ok=True)
     agent_registry = AgentRegistry()
     session_manager = SessionManager()
@@ -67,6 +70,7 @@ def build_app(root_dir=None, on_tool=None, on_cron_event=None) -> TrustworthyAss
 
     tools = ToolRegistry(
         memory_service,
+        bookkeeping_service=bookkeeping_service,
         on_tool=on_tool,
         reminder_callback=_reminder_callback,
         anthropic_client=client,
@@ -98,12 +102,16 @@ def build_app(root_dir=None, on_tool=None, on_cron_event=None) -> TrustworthyAss
         on_event=on_cron_event,
     )
     cron_scheduler_placeholder[0] = cron_scheduler
+    if channel_sender is not None:
+        cron_scheduler.channel_sender = channel_sender
+        cron_scheduler.start()
 
     return TrustworthyAssistantApp(
         config=config,
         bootstrap_loader=bootstrap_loader,
         skills_catalog=skills_catalog,
         memory_service=memory_service,
+        bookkeeping_service=bookkeeping_service,
         prompt_builder=prompt_builder,
         agent_registry=agent_registry,
         session_manager=session_manager,

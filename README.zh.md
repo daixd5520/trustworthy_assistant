@@ -33,6 +33,7 @@
 - 🧠 **向量记忆**: 基于 embeddings 的语义检索能力
 - 💬 **WeCom 机器人**: 支持企业微信机器人接入
 - 💬 **个人微信机器人**: 支持 iLink / ClawBot 方式绑定个人微信
+- 💰 **本地记账能力**: 支持收支记录、分类统计与账本汇总
 - 🛡️ **Supervisor 工作流**: 内置 plan / execute / review / verify 流程
 
 ---
@@ -46,6 +47,7 @@ trustworthy_assistant/
 │       ├── channels/          # 多通道接入
 │       │   └── wecom.py       # 企业微信集成
 │       │   └── wechat.py      # 个人微信 iLink 集成
+│       ├── bookkeeping.py     # 本地账本与自动账单
 │       ├── memory/            # 可信记忆系统
 │       │   ├── models.py
 │       │   ├── repository.py
@@ -304,8 +306,57 @@ trustworthy-wecom
 ### 当前能力
 - 使用 iLink / ClawBot 风格的 HTTP 接口
 - 登录态与上下文 token 保存在 `.wechat_personal/`
-- 当前仅支持文本消息
+- 支持文本、图片、文件，以及微信侧已转写的语音文本
 - 复用现有 `turn_processor` 和 session 链路
+
+---
+
+## 💰 记账能力
+
+项目内置了一套轻量本地账本能力，适合通过 CLI 或微信进行日常记账、查账和定时账单推送。
+
+### 账本数据
+
+- 账目会写入 `workspace/bookkeeping/ledger.jsonl`
+- 每条记录包含时间、金额、收支类型、分类、备注、来源、渠道与用户标识
+- 当前支持 `expense` 与 `income` 两类记录
+
+### 记账相关工具
+
+| 工具 | 作用 |
+|------|------|
+| `ledger_add_entry` | 记一笔收入或支出 |
+| `ledger_report` | 生成今日、本周、本月、上周、上月账本统计 |
+| `ledger_configure_reports` | 配置每天、每周、每月自动账单推送 |
+
+### 记账 Skill
+
+项目已提供 `workspace/skills/bookkeeping-skill/SKILL.md`，用于指导模型在以下场景自动调用记账工具：
+
+- 记录消费、收入、报销
+- 查询今日、本周、本月账本
+- 按分类查看统计
+- 开启日/周/月账单推送
+
+### 自动账单
+
+通过 `ledger_configure_reports` 配置后，任务会写入 `workspace/CRON.json`，并由现有 cron 调度器按计划主动推送到当前通道。
+
+默认时间如下：
+
+- 日报：每天 `23:00`
+- 周报：周日 `23:00`
+- 月报：每月 `1 日 00:05` 发送上月账单
+
+### 示例用法
+
+```text
+午饭 32，帮我记一下
+打车 18，记账
+看看今天账本
+本周按类别统计一下
+以后每天晚上 11 点、每周末、每月给我发账单
+```
 
 ---
 

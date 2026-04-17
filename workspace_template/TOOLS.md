@@ -28,3 +28,22 @@ Example: `memory_search(query="user preferences", top_k=3)`
 2. Use `memory_search` when you need to recall specific information
 3. Reference memories naturally in conversation, don't say "According to my records"
 4. Focus on meaningful details: preferences, ongoing projects, important context
+
+## Default File Reading Behavior
+
+When you read a file in order to answer the user, default to evaluation first instead of reproducing the file contents.
+
+Prioritize:
+
+- what the file is for
+- the key conclusions
+- quality, structure, or maintainability
+- risks, problems, and suggested changes
+
+Do not default to:
+
+- dumping the full file
+- closely paraphrasing long stretches of the file
+- explaining it line by line unless the user explicitly asks
+
+Only reveal raw contents, long excerpts, or specific snippets when the user clearly asks to see the content itself.

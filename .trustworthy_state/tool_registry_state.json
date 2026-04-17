@@ -1,5 +1,24 @@
 {
-  "pending_command_approvals": {},
+  "pending_command_approvals": {
+    "agent:main:cron:morning-briefing": {
+      "session_key": "agent:main:cron:morning-briefing",
+      "command": "python3 .dbg/mmx_from_env.py search query --q \"北京天气 2026年4月17日\"",
+      "argv": [
+        "python3",
+        ".dbg/mmx_from_env.py",
+        "search",
+        "query",
+        "--q",
+        "北京天气 2026年4月17日"
+      ],
+      "cwd": "/Users/bytedance/Documents/trae/trustworthy_assistant/workspace",
+      "risk": "medium",
+      "reason": "requires explicit user confirmation",
+      "timeout_seconds": 15,
+      "max_output_chars": 4000,
+      "created_at": "2026-04-17T09:00:32.013066"
+    }
+  },
   "approved_command_prefixes": {
     "agent:main:wechat:o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat": [
       [
@@ -23,6 +42,10 @@
       ],
       [
         "unzip"
+      ],
+      [
+        "python3",
+        "/users/bytedance/documents/trae/trustworthy_assistant/workspace/read_cron.py"
       ]
     ]
   }

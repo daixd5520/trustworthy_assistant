@@ -18,6 +18,8 @@ from typing import Any
 
 import httpx
 
+from trustworthy_assistant.slash_commands import handle_slash_command
+
 try:
     import qrcode
 except ImportError:  # pragma: no cover - optional dependency at runtime
@@ -279,6 +281,15 @@ class IncomingWeChatFile:
 
 
 @dataclass(slots=True)
+class IncomingWeChatVoice:
+    text: str = ""
+    file_name: str = ""
+    duration_ms: int = 0
+    is_quoted: bool = False
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class IncomingWeChatMessage:
     sender_id: str
     text: str
@@ -287,6 +298,7 @@ class IncomingWeChatMessage:
     received_at: str
     raw: dict[str, Any]
     quoted: IncomingWeChatReference | None = None
+    voices: list[IncomingWeChatVoice] = field(default_factory=list)
     images: list[IncomingWeChatImage] = field(default_factory=list)
     files: list[IncomingWeChatFile] = field(default_factory=list)
 
@@ -388,11 +400,12 @@ def normalize_incoming_message(message: dict[str, Any]) -> IncomingWeChatMessage
     if not sender_id:
         return None
     item_list = message.get("item_list")
-    text = _text_from_item_list(item_list)
+    text = _text_from_item_list(item_list, include_voice=False)
     quoted = _extract_reference_from_item_list(item_list)
+    voices = _extract_voices_from_item_list(item_list)
     images = _extract_images_from_item_list(item_list)
     files = _extract_files_from_item_list(item_list)
-    if not text and quoted is None and not images and not files:
+    if not text and quoted is None and not voices and not images and not files:
         return None
     context_token = str(message.get("context_token") or "").strip()
     message_id = str(message.get("message_id") or "").strip()
@@ -411,13 +424,14 @@ def normalize_incoming_message(message: dict[str, Any]) -> IncomingWeChatMessage
         message_id=message_id,
         received_at=received_at,
         quoted=quoted,
+        voices=voices,
         images=images,
         files=files,
         raw=message,
     )
 
 
-def _text_from_item_list(item_list: Any) -> str:
+def _text_from_item_list(item_list: Any, *, include_voice: bool = True) -> str:
     if not isinstance(item_list, list):
         return ""
     texts: list[str] = []
@@ -427,7 +441,7 @@ def _text_from_item_list(item_list: Any) -> str:
             text = str(((item or {}).get("text_item") or {}).get("text") or "").strip()
             if text:
                 texts.append(text)
-        if item_type == MESSAGE_ITEM_VOICE:
+        if include_voice and item_type == MESSAGE_ITEM_VOICE:
             text = str(((item or {}).get("voice_item") or {}).get("text") or "").strip()
             if text:
                 texts.append(text)
@@ -525,6 +539,38 @@ def _append_image_from_item(images: list[IncomingWeChatImage], item: Any, *, is_
             raw=image_item if isinstance(image_item, dict) else {},
         )
     )
+
+
+def _append_voice_from_item(voices: list[IncomingWeChatVoice], item: Any, *, is_quoted: bool) -> None:
+    if int((item or {}).get("type") or 0) != MESSAGE_ITEM_VOICE:
+        return
+    voice_item = (item or {}).get("voice_item") or {}
+    text = str(voice_item.get("text") or "").strip()
+    duration_ms = int(voice_item.get("duration_ms") or voice_item.get("duration") or 0)
+    voices.append(
+        IncomingWeChatVoice(
+            text=text,
+            file_name=str(voice_item.get("file_name") or voice_item.get("name") or "").strip(),
+            duration_ms=duration_ms if duration_ms > 0 else 0,
+            is_quoted=is_quoted,
+            raw=voice_item if isinstance(voice_item, dict) else {},
+        )
+    )
+
+
+def _extract_voices_from_item_list(item_list: Any) -> list[IncomingWeChatVoice]:
+    if not isinstance(item_list, list):
+        return []
+    voices: list[IncomingWeChatVoice] = []
+    for item in item_list:
+        _append_voice_from_item(voices, item, is_quoted=False)
+        ref = _reference_payload_from_item(item)
+        if not isinstance(ref, dict):
+            continue
+        ref_item = ref.get("message_item")
+        if isinstance(ref_item, dict):
+            _append_voice_from_item(voices, ref_item, is_quoted=True)
+    return voices
 
 
 def _extract_images_from_item_list(item_list: Any) -> list[IncomingWeChatImage]:
@@ -1110,6 +1156,7 @@ class WeChatBotRunner:
         self._client: ILinkWeChatClient | None = None
         self._account: WeChatAccount | None = None
         self._context_tokens: dict[str, str] = {}
+        self._agent_overrides: dict[str, str] = {}
         self._instance_lock = None
 
     def _acquire_instance_lock(self, account_id: str) -> None:
@@ -1264,6 +1311,29 @@ class WeChatBotRunner:
                 lines.append("检测到引用动作，但当前没有拿到被引用消息的正文。请优先结合当前消息判断用户意图。")
         if inbound.text:
             lines.append(f"用户当前消息：{inbound.text}")
+        if inbound.voices:
+            current_voices = [voice for voice in inbound.voices if not voice.is_quoted]
+            quoted_voices = [voice for voice in inbound.voices if voice.is_quoted]
+            if current_voices:
+                lines.append(f"用户这次还发送了 {len(current_voices)} 条语音消息。")
+                for index, voice in enumerate(current_voices, start=1):
+                    duration_hint = f"，时长约 {voice.duration_ms} ms" if voice.duration_ms > 0 else ""
+                    if voice.text:
+                        lines.append(f"当前语音 {index} 的微信转写文本{duration_hint}：{voice.text}")
+                    else:
+                        lines.append(f"当前语音 {index} 已收到{duration_hint}，但当前没有拿到微信转写文本。")
+            if quoted_voices:
+                lines.append(f"被引用的上一条消息里还包含 {len(quoted_voices)} 条语音消息。")
+                for index, voice in enumerate(quoted_voices, start=1):
+                    duration_hint = f"，时长约 {voice.duration_ms} ms" if voice.duration_ms > 0 else ""
+                    if voice.text:
+                        lines.append(f"被引用语音 {index} 的微信转写文本{duration_hint}：{voice.text}")
+                    else:
+                        lines.append(f"被引用语音 {index} 已收到{duration_hint}，但当前没有拿到微信转写文本。")
+            if any(voice.text for voice in inbound.voices):
+                lines.append("语音文本来自微信侧转写，可能和原话存在少量误差；回答时优先按用户真实意图理解。")
+            else:
+                lines.append("不要说未收到语音；应说明语音已收到，但当前没有拿到微信转写文本。")
         if inbound.images:
             current_images = [image for image in inbound.images if not image.is_quoted]
             quoted_images = [image for image in inbound.images if image.is_quoted]
@@ -1376,28 +1446,32 @@ class WeChatBotRunner:
         finally:
             self._send_typing(user_id, context_token, status=0)
 
-    def _handle_approval_command(self, inbound: IncomingWeChatMessage) -> bool:
-        command = (inbound.text or "").strip().lower()
-        if command not in {"/yes", "/always", "/no", "/approvals"}:
+    def _handle_slash_command(self, inbound: IncomingWeChatMessage) -> bool:
+        command = (inbound.text or "").strip()
+        if not command.startswith("/"):
             return False
-        agent_id = self.app.agent_registry.default_agent_id
+        agent_id = self._agent_overrides.get(
+            inbound.sender_id,
+            self.app.agent_registry.default_agent_id,
+        )
         session_key = self.app.session_manager.build_session_key(
             agent_id=agent_id,
             channel="wechat",
             user_id=inbound.sender_id,
         )
         self.app.tools.set_channel_context("wechat", inbound.sender_id, inbound.text, session_key)
-        if command == "/approvals":
-            lines = self.app.tools.format_pending_status_lines(session_key)
-            self._reply_text(inbound.sender_id, "\n".join(lines), inbound.context_token)
-            return True
-        if command == "/yes":
-            result = self.app.tools.approve_pending_command(session_key, remember=False)
-        elif command == "/always":
-            result = self.app.tools.approve_pending_command(session_key, remember=True)
-        else:
-            result = self.app.tools.reject_pending_command(session_key)
-        self._reply_text(inbound.sender_id, result, inbound.context_token)
+        result = handle_slash_command(
+            self.app,
+            command,
+            channel="wechat",
+            user_id=inbound.sender_id,
+            current_agent_id=agent_id,
+        )
+        if not result.handled:
+            return False
+        if result.current_agent_id:
+            self._agent_overrides[inbound.sender_id] = result.current_agent_id
+        self._reply_text(inbound.sender_id, result.response, inbound.context_token)
         return True
 
     def _resolve_typing_ticket(self, user_id: str, context_token: str) -> str:
@@ -1501,6 +1575,8 @@ class WeChatBotRunner:
                                     "has_ref_msg": isinstance(node.get("ref_msg"), dict),
                                     "image_item_keys": sorted(list(image_node.keys()))[:20],
                                     "media_keys": sorted(list(media_node.keys()))[:20],
+                                    "voice_item_keys": sorted(list((((node.get("voice_item") or {})).keys())))[:20] if isinstance(node.get("voice_item"), dict) else [],
+                                    "voice_text": str((((node.get("voice_item") or {})).get("text") or ""))[:120] if isinstance(node.get("voice_item"), dict) else "",
                                     "file_item_keys": sorted(list(file_node.keys()))[:20],
                                     "file_media_keys": sorted(list(file_media_node.keys()))[:20],
                                     "file_name": str(file_node.get("file_name") or "")[:120],
@@ -1535,6 +1611,7 @@ class WeChatBotRunner:
                             "message_type": (message or {}).get("message_type"),
                             "has_text": bool(_text_from_item_list(raw_item_list)),
                             "has_quote": bool(_extract_reference_from_item_list(raw_item_list)),
+                            "voice_count": len(_extract_voices_from_item_list(raw_item_list)),
                             "image_count": len(_extract_images_from_item_list(raw_item_list)),
                             "file_count": len(_extract_files_from_item_list(raw_item_list)),
                             "item_types": [item.get("type") for item in raw_item_list[:8]] if isinstance(raw_item_list, list) else [],
@@ -1586,11 +1663,15 @@ class WeChatBotRunner:
                     }, trace_id=trace_id)
                     # #endregion
                     self.on_event(
-                        f"recv {inbound.sender_id}: text={bool(inbound.text)} images={len(inbound.images)} files={len(inbound.files)} quote={bool(inbound.quoted)}"
+                        f"recv {inbound.sender_id}: text={bool(inbound.text)} voices={len(inbound.voices)} images={len(inbound.images)} files={len(inbound.files)} quote={bool(inbound.quoted)}"
                     )
-                    if self._handle_approval_command(inbound):
+                    if self._handle_slash_command(inbound):
                         continue
-                    agent = self.app.agent_registry.get(self.app.agent_registry.default_agent_id)
+                    agent_id = self._agent_overrides.get(
+                        inbound.sender_id,
+                        self.app.agent_registry.default_agent_id,
+                    )
+                    agent = self.app.agent_registry.get(agent_id)
                     result = self.app.turn_processor.process_turn(
                         turn_input,
                         agent=agent,
