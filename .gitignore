@@ -74,3 +74,4 @@ Thumbs.db
 workspace/
 *.jsonl
 !workspace_template/**
+.wechat_personal/incoming/*
