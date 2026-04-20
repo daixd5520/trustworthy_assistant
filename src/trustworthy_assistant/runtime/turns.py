@@ -173,6 +173,7 @@ class TurnProcessor:
         tool_registry,
         session_manager: SessionManager,
         model_id: str,
+        dream_service=None,
     ) -> None:
         self.client = client
         self.prompt_builder = prompt_builder
@@ -182,6 +183,7 @@ class TurnProcessor:
         self.tool_registry = tool_registry
         self.session_manager = session_manager
         self.model_id = model_id
+        self.dream_service = dream_service
 
     @staticmethod
     def _should_retry_provider_error(exc: Exception) -> bool:
@@ -250,14 +252,34 @@ class TurnProcessor:
             raise last_exc
         raise RuntimeError("provider stream failed without exception detail")
 
-    def build_memory_context(self, user_message: str) -> str:
-        results = self.memory_service.hybrid_search(user_message, top_k=3)
+    def build_memory_context(self, user_message: str, *, channel: str, user_id: str, agent_id: str) -> str:
+        results = self.memory_service.hybrid_search(
+            user_message,
+            top_k=3,
+            agent_id=agent_id,
+            channel=channel,
+            user_id=user_id,
+        )
         if not results:
             return ""
         return "\n".join(
             f"- [{item['path']}] (status={item['status']}, score={item['score']}) {item['snippet']}"
             for item in results
         )
+
+    def build_lessons_context(self, user_message: str, *, channel: str, user_id: str, agent_id: str) -> str:
+        if self.dream_service is None:
+            return ""
+        try:
+            return self.dream_service.format_lessons_context(
+                user_message,
+                agent_id=agent_id,
+                channel=channel,
+                user_id=user_id,
+                top_k=3,
+            )
+        except Exception:
+            return ""
 
     def build_daily_digest_context(self, channel: str, user_id: str, agent_id: str) -> str:
         if channel == "cron":
@@ -293,6 +315,20 @@ class TurnProcessor:
             )
         except Exception:
             pass
+        if self.dream_service is None:
+            return
+        if channel == "cron":
+            return
+        try:
+            local_date = self.memory_service.local_day_key()
+            self.dream_service.ensure_plan(
+                agent_id=agent_id,
+                channel=channel,
+                user_id=user_id,
+                local_date=local_date,
+            )
+        except Exception:
+            pass
 
     def process_turn(
         self,
@@ -303,18 +339,26 @@ class TurnProcessor:
         on_progress: Optional[Callable[[str], None]] = None,
     ) -> TurnResult:
         session = self.session_manager.get_or_create(agent.agent_id, channel=channel, user_id=user_id)
-        self.tool_registry.set_channel_context(channel, user_id, user_input, session.session_key)
+        self.tool_registry.set_channel_context(channel, user_id, user_input, session.session_key, agent.agent_id)
         bootstrap_data = self.bootstrap_loader.load_all(mode=agent.prompt_mode)
         self.skills_catalog.discover()
         skills_block = self.skills_catalog.format_prompt_block()
-        self.memory_service.ingest_user_message(user_input, session_key=session.session_key)
-        memory_context = self.build_memory_context(user_input)
+        self.memory_service.ingest_user_message(
+            user_input,
+            session_key=session.session_key,
+            agent_id=agent.agent_id,
+            channel=channel,
+            user_id=user_id,
+        )
+        memory_context = self.build_memory_context(user_input, channel=channel, user_id=user_id, agent_id=agent.agent_id)
+        lessons_context = self.build_lessons_context(user_input, channel=channel, user_id=user_id, agent_id=agent.agent_id)
         daily_digest_context = self.build_daily_digest_context(channel, user_id, agent.agent_id)
         system_prompt = self.prompt_builder.build(
             bootstrap=bootstrap_data,
             skills_block=skills_block,
             registered_tools_block=self.tool_registry.format_prompt_block(),
             memory_context=memory_context,
+            lessons_context=lessons_context,
             daily_digest_context=daily_digest_context,
             mode=agent.prompt_mode,
             agent_id=agent.agent_id,
@@ -433,18 +477,26 @@ class TurnProcessor:
     def process_turn_stream(self, user_input: str, agent: AgentProfile, channel: str = "terminal", 
                            user_id: str = "local", on_text: Optional[Callable[[str], None]] = None) -> TurnResult:
         session = self.session_manager.get_or_create(agent.agent_id, channel=channel, user_id=user_id)
-        self.tool_registry.set_channel_context(channel, user_id, user_input, session.session_key)
+        self.tool_registry.set_channel_context(channel, user_id, user_input, session.session_key, agent.agent_id)
         bootstrap_data = self.bootstrap_loader.load_all(mode=agent.prompt_mode)
         self.skills_catalog.discover()
         skills_block = self.skills_catalog.format_prompt_block()
-        self.memory_service.ingest_user_message(user_input, session_key=session.session_key)
-        memory_context = self.build_memory_context(user_input)
+        self.memory_service.ingest_user_message(
+            user_input,
+            session_key=session.session_key,
+            agent_id=agent.agent_id,
+            channel=channel,
+            user_id=user_id,
+        )
+        memory_context = self.build_memory_context(user_input, channel=channel, user_id=user_id, agent_id=agent.agent_id)
+        lessons_context = self.build_lessons_context(user_input, channel=channel, user_id=user_id, agent_id=agent.agent_id)
         daily_digest_context = self.build_daily_digest_context(channel, user_id, agent.agent_id)
         system_prompt = self.prompt_builder.build(
             bootstrap=bootstrap_data,
             skills_block=skills_block,
             registered_tools_block=self.tool_registry.format_prompt_block(),
             memory_context=memory_context,
+            lessons_context=lessons_context,
             daily_digest_context=daily_digest_context,
             mode=agent.prompt_mode,
             agent_id=agent.agent_id,

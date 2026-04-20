@@ -112,6 +112,40 @@ class TrustworthyMemoryService:
             return text
         return text[:limit] + "..."
 
+    @staticmethod
+    def _matches_scope(record, agent_id: str = "", channel: str = "", user_id: str = "") -> bool:
+        record_agent = str(getattr(record, "agent_id", "") or "")
+        record_channel = str(getattr(record, "channel", "") or "")
+        record_user = str(getattr(record, "user_id", "") or "")
+        if agent_id and record_agent not in {"", agent_id}:
+            return False
+        if channel and record_channel not in {"", channel}:
+            return False
+        if user_id and record_user not in {"", user_id}:
+            return False
+        return True
+
+    @staticmethod
+    def _same_scope(record, agent_id: str = "", channel: str = "", user_id: str = "") -> bool:
+        return (
+            str(getattr(record, "agent_id", "") or "") == str(agent_id or "")
+            and str(getattr(record, "channel", "") or "") == str(channel or "")
+            and str(getattr(record, "user_id", "") or "") == str(user_id or "")
+        )
+
+    @staticmethod
+    def _entry_matches_scope(entry: dict[str, Any], agent_id: str = "", channel: str = "", user_id: str = "") -> bool:
+        entry_agent = str(entry.get("agent_id") or "")
+        entry_channel = str(entry.get("channel") or "")
+        entry_user = str(entry.get("user_id") or "")
+        if agent_id and entry_agent not in {"", agent_id}:
+            return False
+        if channel and entry_channel not in {"", channel}:
+            return False
+        if user_id and entry_user not in {"", user_id}:
+            return False
+        return True
+
     def summarize_turn(
         self,
         user_input: str,
@@ -177,14 +211,49 @@ class TrustworthyMemoryService:
     def load_latest_memories(self) -> list[MemoryRecord]:
         return self.repository.load_latest_memories()
 
+    def load_scoped_memories(
+        self,
+        *,
+        agent_id: str = "",
+        channel: str = "",
+        user_id: str = "",
+    ) -> list[MemoryRecord]:
+        return [
+            record
+            for record in self.load_latest_memories()
+            if self._matches_scope(record, agent_id=agent_id, channel=channel, user_id=user_id)
+        ]
+
+    def load_owned_memories(
+        self,
+        *,
+        agent_id: str = "",
+        channel: str = "",
+        user_id: str = "",
+    ) -> list[MemoryRecord]:
+        return [
+            record
+            for record in self.load_latest_memories()
+            if self._same_scope(record, agent_id=agent_id, channel=channel, user_id=user_id)
+        ]
+
     def load_memory_map(self) -> dict[str, MemoryRecord]:
         return self.repository.load_memory_map()
 
-    def find_conflicts(self, slot: str, value: str, current_id: str = "") -> list[str]:
+    def find_conflicts(
+        self,
+        slot: str,
+        value: str,
+        current_id: str = "",
+        *,
+        agent_id: str = "",
+        channel: str = "",
+        user_id: str = "",
+    ) -> list[str]:
         if slot not in {"language.primary", "response.style", "project.current", "decision.current", "constraint.current"}:
             return []
         conflicts: list[str] = []
-        for record in self.load_latest_memories():
+        for record in self.load_owned_memories(agent_id=agent_id, channel=channel, user_id=user_id):
             if current_id and record.memory_id == current_id:
                 continue
             if record.status not in {"candidate", "confirmed", "disputed"}:
@@ -215,6 +284,9 @@ class TrustworthyMemoryService:
         session_key: str = "",
         confidence: float = 0.75,
         importance: float = 0.75,
+        agent_id: str = "",
+        channel: str = "",
+        user_id: str = "",
     ) -> MemoryRecord:
         kind = self.kind_for_category(category)
         slot = self.slot_for(category, content)
@@ -223,7 +295,7 @@ class TrustworthyMemoryService:
         now = self.now_iso()
         evidence_id = self.create_evidence(source_type, content, category, session_key)
         existing = None
-        for record in self.load_latest_memories():
+        for record in self.load_owned_memories(agent_id=agent_id, channel=channel, user_id=user_id):
             if record.fingerprint == fingerprint and record.status != "archived":
                 existing = record
                 break
@@ -238,14 +310,24 @@ class TrustworthyMemoryService:
             if status == "confirmed":
                 updated.status = "confirmed"
                 updated.last_confirmed_at = now
-            updated.conflicts_with = self.dedupe(updated.conflicts_with + self.find_conflicts(slot, value, updated.memory_id))
+            updated.conflicts_with = self.dedupe(
+                updated.conflicts_with
+                + self.find_conflicts(
+                    slot,
+                    value,
+                    updated.memory_id,
+                    agent_id=agent_id,
+                    channel=channel,
+                    user_id=user_id,
+                )
+            )
             self.repository.append_memory(updated)
             self.append_event("upserted", updated.memory_id, "same_fingerprint", existing.status, updated.status)
             
             self._index_memory_to_vector(updated)
             return updated
 
-        conflicts = self.find_conflicts(slot, value)
+        conflicts = self.find_conflicts(slot, value, agent_id=agent_id, channel=channel, user_id=user_id)
         record = MemoryRecord(
             memory_id=self.new_id("mem"),
             kind=kind,
@@ -267,6 +349,9 @@ class TrustworthyMemoryService:
             supersedes=[],
             conflicts_with=conflicts,
             fingerprint=fingerprint,
+            agent_id=agent_id,
+            channel=channel,
+            user_id=user_id,
         )
         self.repository.append_memory(record)
         self.append_event("created", record.memory_id, source_type, "", record.status)
@@ -297,15 +382,30 @@ class TrustworthyMemoryService:
             "confidence": record.confidence,
             "importance": record.importance,
             "last_seen_at": record.last_seen_at,
+            "agent_id": record.agent_id,
+            "channel": record.channel,
+            "user_id": record.user_id,
         }
-        self.vector_store.add(
-            collection_name="memories",
-            texts=[text],
-            metadatas=[metadata],
-            ids=[record.memory_id]
-        )
+        try:
+            self.vector_store.add(
+                collection_name="memories",
+                texts=[text],
+                metadatas=[metadata],
+                ids=[record.memory_id]
+            )
+        except Exception:
+            # Vector indexing is best-effort and should not block ledger persistence.
+            pass
 
-    def ingest_user_message(self, content: str, session_key: str = "") -> list[MemoryRecord]:
+    def ingest_user_message(
+        self,
+        content: str,
+        session_key: str = "",
+        *,
+        agent_id: str = "",
+        channel: str = "",
+        user_id: str = "",
+    ) -> list[MemoryRecord]:
         candidates: list[tuple[str, str]] = []
         lowered = content.lower()
         if ("中文" in content and "回答" in content) or "reply in chinese" in lowered:
@@ -326,16 +426,30 @@ class TrustworthyMemoryService:
                     session_key=session_key,
                     confidence=0.62,
                     importance=0.7 if category == "project" else 0.65,
+                    agent_id=agent_id,
+                    channel=channel,
+                    user_id=user_id,
                 )
             )
         return staged
 
-    def write_memory(self, content: str, category: str = "general") -> str:
+    def write_memory(
+        self,
+        content: str,
+        category: str = "general",
+        *,
+        agent_id: str = "",
+        channel: str = "",
+        user_id: str = "",
+    ) -> str:
         payload = {
             "ts": self.now_iso(),
             "local_date": self.local_day_key(),
             "category": category,
             "content": content,
+            "agent_id": agent_id,
+            "channel": channel,
+            "user_id": user_id,
         }
         try:
             self.repository.append_daily_entry(payload)
@@ -346,6 +460,9 @@ class TrustworthyMemoryService:
                 source_type="tool_memory_write",
                 confidence=0.88,
                 importance=0.82,
+                agent_id=agent_id,
+                channel=channel,
+                user_id=user_id,
             )
             self.sync_memory_markdown()
             day = payload["ts"][:10]
@@ -452,7 +569,13 @@ class TrustworthyMemoryService:
             total_chars = projected
         return "\n".join(lines)
 
-    def raw_chunks(self) -> list[dict[str, Any]]:
+    def raw_chunks(
+        self,
+        *,
+        agent_id: str = "",
+        channel: str = "",
+        user_id: str = "",
+    ) -> list[dict[str, Any]]:
         chunks: list[dict[str, Any]] = []
         evergreen = self.load_evergreen()
         if evergreen:
@@ -461,6 +584,8 @@ class TrustworthyMemoryService:
                 if paragraph:
                     chunks.append({"path": "MEMORY.md", "text": paragraph})
         for entry in self.repository.load_daily_entries():
+            if not self._entry_matches_scope(entry, agent_id=agent_id, channel=channel, user_id=user_id):
+                continue
             if entry.get("kind") == "conversation_digest":
                 text = entry.get("summary", "")
                 if not text:
@@ -476,9 +601,15 @@ class TrustworthyMemoryService:
             chunks.append({"path": label, "text": text})
         return chunks
 
-    def ledger_chunks(self) -> list[dict[str, Any]]:
+    def ledger_chunks(
+        self,
+        *,
+        agent_id: str = "",
+        channel: str = "",
+        user_id: str = "",
+    ) -> list[dict[str, Any]]:
         chunks: list[dict[str, Any]] = []
-        for record in self.load_latest_memories():
+        for record in self.load_scoped_memories(agent_id=agent_id, channel=channel, user_id=user_id):
             if record.status in {"archived", "expired"}:
                 continue
             text = f"{record.summary}\n{record.value}".strip()
@@ -494,6 +625,9 @@ class TrustworthyMemoryService:
                     "importance": record.importance,
                     "slot": record.slot,
                     "kind": record.kind,
+                    "agent_id": record.agent_id,
+                    "channel": record.channel,
+                    "user_id": record.user_id,
                 }
             )
         return chunks
@@ -531,9 +665,26 @@ class TrustworthyMemoryService:
         self.last_trace = trace
         self.repository.append_trace(trace)
 
-    def hybrid_search(self, query: str, top_k: int = 5, use_vector: bool = True) -> list[dict[str, Any]]:
-        ledger_ranked = self.rank_chunks(query, self.ledger_chunks(), top_k=max(top_k * 2, 6))
-        raw_ranked = self.rank_chunks(query, self.raw_chunks(), top_k=max(top_k * 2, 6))
+    def hybrid_search(
+        self,
+        query: str,
+        top_k: int = 5,
+        use_vector: bool = True,
+        *,
+        agent_id: str = "",
+        channel: str = "",
+        user_id: str = "",
+    ) -> list[dict[str, Any]]:
+        ledger_ranked = self.rank_chunks(
+            query,
+            self.ledger_chunks(agent_id=agent_id, channel=channel, user_id=user_id),
+            top_k=max(top_k * 2, 6),
+        )
+        raw_ranked = self.rank_chunks(
+            query,
+            self.raw_chunks(agent_id=agent_id, channel=channel, user_id=user_id),
+            top_k=max(top_k * 2, 6),
+        )
         results: list[dict[str, Any]] = []
         seen_keys: set[str] = set()
         for ranked in ledger_ranked:
@@ -584,6 +735,12 @@ class TrustworthyMemoryService:
                         continue
                     seen_keys.add(key)
                     metadata = vr.get("metadata", {})
+                    if agent_id and metadata.get("agent_id") not in {"", agent_id}:
+                        continue
+                    if channel and metadata.get("channel") not in {"", channel}:
+                        continue
+                    if user_id and metadata.get("user_id") not in {"", user_id}:
+                        continue
                     score = vr["score"]
                     if metadata.get("status"):
                         score *= self.status_weight(metadata.get("status", "candidate"))
@@ -608,18 +765,44 @@ class TrustworthyMemoryService:
         self.record_trace(query, selected)
         return selected
 
-    def list_memories(self, status: str = "", limit: int = 20) -> list[dict[str, Any]]:
-        rows = self.load_latest_memories()
+    def list_memories(
+        self,
+        status: str = "",
+        limit: int = 20,
+        *,
+        agent_id: str = "",
+        channel: str = "",
+        user_id: str = "",
+    ) -> list[dict[str, Any]]:
+        rows = self.load_scoped_memories(agent_id=agent_id, channel=channel, user_id=user_id)
         if status:
             rows = [row for row in rows if row.status == status]
         rows.sort(key=lambda row: (row.last_seen_at, row.importance), reverse=True)
         return [row.to_dict() for row in rows[:limit]]
 
-    def list_candidates(self, limit: int = 20) -> list[dict[str, Any]]:
-        return self.list_memories(status="candidate", limit=limit)
+    def list_candidates(
+        self,
+        limit: int = 20,
+        *,
+        agent_id: str = "",
+        channel: str = "",
+        user_id: str = "",
+    ) -> list[dict[str, Any]]:
+        return self.list_memories(status="candidate", limit=limit, agent_id=agent_id, channel=channel, user_id=user_id)
 
-    def list_conflicts(self, limit: int = 20) -> list[dict[str, Any]]:
-        rows = [row for row in self.load_latest_memories() if row.status == "disputed" or row.conflicts_with]
+    def list_conflicts(
+        self,
+        limit: int = 20,
+        *,
+        agent_id: str = "",
+        channel: str = "",
+        user_id: str = "",
+    ) -> list[dict[str, Any]]:
+        rows = [
+            row
+            for row in self.load_scoped_memories(agent_id=agent_id, channel=channel, user_id=user_id)
+            if row.status == "disputed" or row.conflicts_with
+        ]
         rows.sort(key=lambda row: row.last_seen_at, reverse=True)
         return [row.to_dict() for row in rows[:limit]]
 
@@ -683,6 +866,9 @@ class TrustworthyMemoryService:
             f"summary: {record.summary}",
             f"confidence: {record.confidence}",
             f"importance: {record.importance}",
+            f"agent_id: {record.agent_id or '-'}",
+            f"channel: {record.channel or '-'}",
+            f"user_id: {record.user_id or '-'}",
             f"source_count: {record.source_count}",
             f"conflicts_with: {', '.join(record.conflicts_with) if record.conflicts_with else '-'}",
             "evidence:",

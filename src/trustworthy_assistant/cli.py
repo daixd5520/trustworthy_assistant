@@ -66,8 +66,14 @@ def setup_input_history(root_dir: Path) -> None:
     atexit.register(_save_history)
 
 
-def build_memory_context(memory_service, user_message: str) -> str:
-    results = memory_service.hybrid_search(user_message, top_k=3)
+def build_memory_context(memory_service, user_message: str, *, agent_id: str = "main", channel: str = "terminal", user_id: str = "local") -> str:
+    results = memory_service.hybrid_search(
+        user_message,
+        top_k=3,
+        agent_id=agent_id,
+        channel=channel,
+        user_id=user_id,
+    )
     if not results:
         return ""
     return "\n".join(
@@ -328,7 +334,157 @@ def handle_memory_command(memory_service, arg: str) -> bool:
     return True
 
 
-def handle_repl_command(app, cmd: str, bootstrap_data: dict[str, str], skills_block: str) -> bool:
+def handle_dream_command(app, arg: str, current_agent_id: str) -> bool:
+    subparts = arg.split(maxsplit=1) if arg else []
+    subcommand = subparts[0].lower() if subparts else "status"
+    subarg = subparts[1].strip() if len(subparts) > 1 else ""
+    if subcommand in {"", "status", "plans"}:
+        print_section("Nightly Dream Plans")
+        rows = app.dream_service.repository.load_plans(agent_id=current_agent_id, channel="terminal", user_id="local", limit=10)
+        if not rows:
+            print(f"{DIM}(暂无 dream 计划){RESET}")
+            return True
+        for row in rows:
+            print(
+                f"  {BLUE}{row.get('job_id','-')}{RESET} "
+                f"status={row.get('status','-')} target={row.get('target_date','-')}"
+            )
+            print(
+                f"    agent={row.get('agent_id','-')} channel={row.get('channel','-')} "
+                f"user={row.get('user_id','-')}"
+            )
+            print(f"    scheduled_for={row.get('scheduled_for','-')}")
+        return True
+    if subcommand == "runs":
+        print_section("Nightly Dream Runs")
+        rows = app.dream_service.repository.load_runs(agent_id=current_agent_id, channel="terminal", user_id="local", limit=10)
+        if not rows:
+            print(f"{DIM}(暂无 dream 运行记录){RESET}")
+            return True
+        for row in rows:
+            color = GREEN if row.get("status") == "ok" else YELLOW
+            print(
+                f"  {color}{row.get('run_id','-')}{RESET} "
+                f"status={row.get('status','-')} target={row.get('target_date','-')}"
+            )
+            print(
+                f"    agent={row.get('agent_id','-')} channel={row.get('channel','-')} "
+                f"user={row.get('user_id','-')}"
+            )
+            print(
+                f"    memories={row.get('new_memory_count',0)} lessons={row.get('new_lesson_count',0)} "
+                f"report={row.get('report_path','-') or '-'}"
+            )
+            if row.get("error"):
+                print(f"    {DIM}error: {row.get('error')}{RESET}")
+        return True
+    if subcommand == "lessons":
+        print_section("Nightly Dream Lessons")
+        active_rows = app.dream_service.repository.load_lessons(
+            agent_id=current_agent_id,
+            channel="terminal",
+            user_id="local",
+            status="active",
+            limit=10,
+        )
+        archived_rows = app.dream_service.repository.load_lessons(
+            agent_id=current_agent_id,
+            channel="terminal",
+            user_id="local",
+            status="archived",
+            limit=10,
+        )
+        if not active_rows and not archived_rows:
+            print(f"{DIM}(暂无 lessons){RESET}")
+            return True
+        print(f"{GREEN}Active:{RESET}")
+        if active_rows:
+            for row in active_rows:
+                print(
+                    f"  {BLUE}{row.get('lesson_id','-')}{RESET} "
+                    f"[{row.get('scope','workflow')}] confidence={row.get('confidence',0)} "
+                    f"importance={row.get('importance',0)}"
+                )
+                print(f"    {row.get('summary','')}")
+        else:
+            print(f"  {DIM}(none){RESET}")
+        print(f"{YELLOW}Archived:{RESET}")
+        if archived_rows:
+            for row in archived_rows:
+                print(
+                    f"  {BLUE}{row.get('lesson_id','-')}{RESET} "
+                    f"[{row.get('scope','workflow')}] confidence={row.get('confidence',0)} "
+                    f"importance={row.get('importance',0)}"
+                )
+                print(f"    {row.get('summary','')}")
+        else:
+            print(f"  {DIM}(none){RESET}")
+        return True
+    if subcommand == "run":
+        try:
+            result = app.dream_service.run_manual(
+                agent_id=current_agent_id,
+                channel="terminal",
+                user_id="local",
+                target_date=subarg,
+            )
+        except Exception as exc:
+            print(f"{YELLOW}dream 手动运行失败: {exc}{RESET}")
+            return True
+        print_section("Nightly Dream Run")
+        print(f"{GREEN}status={result.get('status','-')}{RESET} target={result.get('target_date','-')}")
+        print(
+            f"memories={result.get('new_memory_count',0)} "
+            f"lessons={result.get('new_lesson_count',0)}"
+        )
+        if result.get("report_path"):
+            print(f"report={result.get('report_path')}")
+        return True
+    if subcommand == "report":
+        report = app.dream_service.get_report(
+            agent_id=current_agent_id,
+            channel="terminal",
+            user_id="local",
+            target_date=subarg,
+        )
+        if not report:
+            print(f"{DIM}(暂无 dream report){RESET}")
+            return True
+        print_section(f"Nightly Dream Report: {report.get('target_date','-')}")
+        print(f"{DIM}{report.get('report_path','')}{RESET}")
+        print(report.get("content", "").strip())
+        return True
+    if subcommand == "latest":
+        report = app.dream_service.get_report(
+            agent_id=current_agent_id,
+            channel="terminal",
+            user_id="local",
+            target_date="",
+        )
+        if not report:
+            print(f"{DIM}(暂无最近 dream report){RESET}")
+            return True
+        print_section(f"Nightly Dream Latest: {report.get('target_date','-')}")
+        print(f"{DIM}{report.get('report_path','')}{RESET}")
+        print(report.get("content", "").strip())
+        return True
+    if subcommand == "prune":
+        summary = app.dream_service.prune_lessons(
+            agent_id=current_agent_id,
+            channel="terminal",
+            user_id="local",
+        )
+        print_section("Nightly Dream Prune")
+        print(
+            f"{GREEN}scanned={summary.get('scanned',0)}{RESET} "
+            f"decayed={summary.get('decayed',0)} archived={summary.get('archived',0)}"
+        )
+        return True
+    print(f"{YELLOW}用法: /dream [plans|runs|lessons|run [today|yesterday|YYYY-MM-DD]|report [today|yesterday|YYYY-MM-DD]|latest|prune]{RESET}")
+    return True
+
+
+def handle_repl_command(app, cmd: str, bootstrap_data: dict[str, str], skills_block: str, current_agent_id: str) -> bool:
     parts = cmd.strip().split(maxsplit=1)
     command = parts[0].lower()
     arg = parts[1] if len(parts) > 1 else ""
@@ -343,12 +499,19 @@ def handle_repl_command(app, cmd: str, bootstrap_data: dict[str, str], skills_bl
         return True
     if command == "/memory":
         return handle_memory_command(app.memory_service, arg)
+    if command == "/dream":
+        return handle_dream_command(app, arg, current_agent_id)
     if command == "/search":
         if not arg:
             print(f"{YELLOW}用法: /search <query>{RESET}")
             return True
         print_section(f"记忆搜索: {arg}")
-        results = app.memory_service.hybrid_search(arg)
+        results = app.memory_service.hybrid_search(
+            arg,
+            agent_id=current_agent_id,
+            channel="terminal",
+            user_id="local",
+        )
         if not results:
             print(f"{DIM}(无结果){RESET}")
         else:
@@ -362,7 +525,13 @@ def handle_repl_command(app, cmd: str, bootstrap_data: dict[str, str], skills_bl
         prompt = app.prompt_builder.build(
             bootstrap=bootstrap_data,
             skills_block=skills_block,
-            memory_context=build_memory_context(app.memory_service, "show prompt"),
+            memory_context=build_memory_context(
+                app.memory_service,
+                "show prompt",
+                agent_id=current_agent_id,
+                channel="terminal",
+                user_id="local",
+            ),
         )
         print(prompt[:3000] if len(prompt) > 3000 else prompt)
         if len(prompt) > 3000:
@@ -399,10 +568,11 @@ def run() -> None:
     print_info(f"  Model: {app.config.model_id}")
     print_info(f"  Workspace: {app.config.workspace_dir}")
     print_info(f"  Cron jobs loaded: {len(app.cron_scheduler.list_jobs())}")
-    print_info("  命令: /skills /memory /search /prompt /bootstrap /agents /switch /sessions /maintain /cron /benchmarks")
+    print_info("  命令: /skills /memory /dream /search /prompt /bootstrap /agents /switch /sessions /maintain /cron /benchmarks")
     print_info("  审批: /yes /always /no /approvals")
     print_info("  supervisor: /supervisor /review /verify /workflow")
     print_info("  memory 子命令: stats list candidates trace conflicts show confirm reject forget sync")
+    print_info("  dream 子命令: plans runs lessons run [date] report [date] latest prune")
     print_info("=" * 64)
     try:
         while True:
@@ -421,7 +591,7 @@ def run() -> None:
                 runtime_handled, current_agent_id = handle_runtime_command(app, parts[0].lower(), parts[1] if len(parts) > 1 else "", current_agent_id)
                 if runtime_handled:
                     continue
-            if user_input.startswith("/") and handle_repl_command(app, user_input, bootstrap_data, skills_block):
+            if user_input.startswith("/") and handle_repl_command(app, user_input, bootstrap_data, skills_block, current_agent_id):
                 continue
             agent = app.agent_registry.get(current_agent_id)
             

@@ -24,6 +24,9 @@ class MemoryRecord:
     conflicts_with: list[str] = field(default_factory=list)
     fingerprint: str = ""
     archived_at: str | None = None
+    agent_id: str = ""
+    channel: str = ""
+    user_id: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -52,6 +55,9 @@ class MemoryRecord:
             conflicts_with=list(payload.get("conflicts_with", [])),
             fingerprint=payload.get("fingerprint", ""),
             archived_at=payload.get("archived_at"),
+            agent_id=payload.get("agent_id", ""),
+            channel=payload.get("channel", ""),
+            user_id=payload.get("user_id", ""),
         )
 
 

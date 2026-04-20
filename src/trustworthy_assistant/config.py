@@ -30,6 +30,11 @@ class AppConfig:
     wechat_ilink_base_url: str = "https://ilinkai.weixin.qq.com"
     wechat_qr_bot_type: str = "3"
     wechat_account_id: str | None = None
+    nightly_dream_enabled: bool = True
+    nightly_dream_min_digest_count: int = 3
+    nightly_dream_min_digest_chars: int = 300
+    nightly_dream_window_start_hour: int = 3
+    nightly_dream_window_end_hour: int = 8
 
     @property
     def bootstrap_files(self) -> list[str]:
@@ -69,4 +74,9 @@ def load_config(root_dir: Path | None = None) -> AppConfig:
         wechat_ilink_base_url=os.getenv("WECHAT_ILINK_BASE_URL", "https://ilinkai.weixin.qq.com"),
         wechat_qr_bot_type=os.getenv("WECHAT_QR_BOT_TYPE", "3"),
         wechat_account_id=os.getenv("WECHAT_ACCOUNT_ID") or None,
+        nightly_dream_enabled=os.getenv("NIGHTLY_DREAM_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"},
+        nightly_dream_min_digest_count=int(os.getenv("NIGHTLY_DREAM_MIN_DIGEST_COUNT", "3")),
+        nightly_dream_min_digest_chars=int(os.getenv("NIGHTLY_DREAM_MIN_DIGEST_CHARS", "300")),
+        nightly_dream_window_start_hour=int(os.getenv("NIGHTLY_DREAM_WINDOW_START_HOUR", "3")),
+        nightly_dream_window_end_hour=int(os.getenv("NIGHTLY_DREAM_WINDOW_END_HOUR", "8")),
     )

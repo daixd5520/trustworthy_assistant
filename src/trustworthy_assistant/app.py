@@ -6,6 +6,7 @@ from trustworthy_assistant.bookkeeping import BookkeepingService
 from trustworthy_assistant.bootstrap import BootstrapLoader
 from trustworthy_assistant.config import AppConfig, load_config
 from trustworthy_assistant.eval.benchmarks import BenchmarkSuite
+from trustworthy_assistant.memory.dream_service import DreamService
 from trustworthy_assistant.memory.service import TrustworthyMemoryService
 from trustworthy_assistant.prompting import PromptBuilder
 from trustworthy_assistant.runtime.agents import AgentRegistry
@@ -30,6 +31,7 @@ class TrustworthyAssistantApp:
     session_manager: SessionManager
     maintenance_service: MaintenanceService
     benchmark_suite: BenchmarkSuite
+    dream_service: DreamService
     turn_processor: TurnProcessor
     tools: ToolRegistry
     client: Anthropic
@@ -57,6 +59,19 @@ def build_app(root_dir=None, on_tool=None, on_cron_event=None, channel_sender=No
     maintenance_service = MaintenanceService(memory_service)
     benchmark_suite = BenchmarkSuite()
     supervisor_workflow = SupervisorWorkflow()
+    dream_service = DreamService(
+        workspace_dir=config.workspace_dir,
+        memory_service=memory_service,
+        client=client,
+        model_id=config.model_id,
+        enabled=config.nightly_dream_enabled,
+        min_digest_count=config.nightly_dream_min_digest_count,
+        min_digest_chars=config.nightly_dream_min_digest_chars,
+        window_start_hour=config.nightly_dream_window_start_hour,
+        window_end_hour=config.nightly_dream_window_end_hour,
+        on_event=on_cron_event,
+    )
+    dream_service.ensure_maintenance_job()
 
     _reminder_state: dict = {"counter": 0}
     cron_scheduler_placeholder: list = [None]
@@ -93,12 +108,14 @@ def build_app(root_dir=None, on_tool=None, on_cron_event=None, channel_sender=No
         tool_registry=tools,
         session_manager=session_manager,
         model_id=config.model_id,
+        dream_service=dream_service,
     )
 
     cron_scheduler = CronScheduler(
         workspace_dir=config.workspace_dir,
         agent_registry=agent_registry,
         turn_processor=turn_processor,
+        dream_service=dream_service,
         on_event=on_cron_event,
     )
     cron_scheduler_placeholder[0] = cron_scheduler
@@ -117,6 +134,7 @@ def build_app(root_dir=None, on_tool=None, on_cron_event=None, channel_sender=No
         session_manager=session_manager,
         maintenance_service=maintenance_service,
         benchmark_suite=benchmark_suite,
+        dream_service=dream_service,
         turn_processor=turn_processor,
         tools=tools,
         client=client,

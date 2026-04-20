@@ -1,3 +1,4 @@
+import copy
 import json
 import threading
 from dataclasses import dataclass, field
@@ -55,6 +56,7 @@ class CronScheduler:
         workspace_dir: Path,
         agent_registry,
         turn_processor,
+        dream_service=None,
         on_event: Callable[[str], None] | None = None,
         poll_seconds: float = 15.0,
         channel_sender: Callable[[str, str, str], None] | None = None,
@@ -64,6 +66,7 @@ class CronScheduler:
         self.state_file = self.workspace_dir / "cron_state.json"
         self.agent_registry = agent_registry
         self.turn_processor = turn_processor
+        self.dream_service = dream_service
         self.on_event = on_event or (lambda _message: None)
         self.poll_seconds = poll_seconds
         self.channel_sender = channel_sender
@@ -215,7 +218,7 @@ class CronScheduler:
             job_name = job.name
             job_channel = job.channel
             job_sender_id = job.sender_id
-        if payload_kind != "agent_turn":
+        if payload_kind not in {"agent_turn", "dream_run", "dream_maintain"}:
             self._mark_result(
                 job_id,
                 status="error",
@@ -243,6 +246,69 @@ class CronScheduler:
                 with self._lock:
                     self._jobs.pop(job_id, None)
                 self.on_event(f"job {job_id} removed after run")
+            return
+        if payload_kind == "dream_run":
+            payload = job.raw.get("payload") or {}
+            plan_id = str(payload.get("plan_id") or "").strip()
+            dream_agent_id = str(payload.get("agent_id") or agent_id).strip() or agent_id
+            dream_channel = str(payload.get("channel") or "").strip()
+            dream_user_id = str(payload.get("user_id") or "").strip()
+            target_date = str(payload.get("target_date") or "").strip()
+            if self.dream_service is None:
+                self._mark_result(job_id, status="error", error="dream service unavailable", preview="")
+                return
+            try:
+                result = self.dream_service.run_once(
+                    plan_id=plan_id,
+                    agent_id=dream_agent_id,
+                    channel=dream_channel,
+                    user_id=dream_user_id,
+                    target_date=target_date,
+                )
+                preview = f"dream ok memories={result.get('new_memory_count', 0)} lessons={result.get('new_lesson_count', 0)}"
+                self._mark_result(job_id, status="ok", error="", preview=preview[:120])
+                self.on_event(f"job {job_id} completed")
+                if delete_after_run and not manual:
+                    self._remove_job_from_file(job_id)
+                    with self._lock:
+                        self._jobs.pop(job_id, None)
+                    self.on_event(f"job {job_id} removed after run")
+            except Exception as exc:
+                self._mark_result(job_id, status="error", error=str(exc), preview="")
+                retry_count = max(0, int(payload.get("retry_count") or 0)) + 1
+                retry_at = None
+                if self.dream_service is not None:
+                    retry_at = self.dream_service.next_retry_time(
+                        scheduled_for=scheduled_for,
+                        tz_name=str((job.raw.get("schedule") or {}).get("tz") or "Local"),
+                        retry_count=retry_count,
+                    )
+                if retry_at is not None:
+                    self._reschedule_job_file(job, retry_at=retry_at, retry_count=retry_count)
+                    self.reload_jobs()
+                    self.on_event(f"job {job_id} failed: {exc}; retry scheduled at {retry_at.isoformat()}")
+                else:
+                    if delete_after_run and not manual:
+                        self._remove_job_from_file(job_id)
+                        with self._lock:
+                            self._jobs.pop(job_id, None)
+                    self.on_event(f"job {job_id} failed: {exc}")
+            return
+        if payload_kind == "dream_maintain":
+            if self.dream_service is None:
+                self._mark_result(job_id, status="error", error="dream service unavailable", preview="")
+                return
+            try:
+                summary = self.dream_service.prune_all_lessons()
+                preview = (
+                    f"dream maintain scopes={summary.get('scopes', 0)} "
+                    f"decayed={summary.get('decayed', 0)} archived={summary.get('archived', 0)}"
+                )
+                self._mark_result(job_id, status="ok", error="", preview=preview[:120])
+                self.on_event(f"job {job_id} completed")
+            except Exception as exc:
+                self._mark_result(job_id, status="error", error=str(exc), preview="")
+                self.on_event(f"job {job_id} failed: {exc}")
             return
         agent = self.agent_registry.get(agent_id)
         trigger_label = "manual" if manual else scheduled_for.isoformat()
@@ -366,6 +432,36 @@ class CronScheduler:
         jobs = data.get("jobs")
         return jobs if isinstance(jobs, list) else []
 
+    def _reschedule_job_file(self, job: CronJobState, *, retry_at: datetime, retry_count: int) -> None:
+        if not self.cron_file.is_file():
+            return
+        try:
+            data = json.loads(self.cron_file.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        jobs = data.get("jobs")
+        if not isinstance(jobs, list):
+            return
+        updated_jobs: list[dict] = []
+        for raw in jobs:
+            if not isinstance(raw, dict):
+                updated_jobs.append(raw)
+                continue
+            if str(raw.get("id") or "") != job.job_id:
+                updated_jobs.append(raw)
+                continue
+            rewritten = copy.deepcopy(raw)
+            schedule = rewritten.get("schedule") or {}
+            payload = rewritten.get("payload") or {}
+            retry_local = retry_at.astimezone(self._resolve_tz(str(schedule.get("tz") or "Local")))
+            schedule["expr"] = f"{retry_local.minute} {retry_local.hour} {retry_local.day} {retry_local.month} *"
+            payload["retry_count"] = retry_count
+            rewritten["schedule"] = schedule
+            rewritten["payload"] = payload
+            updated_jobs.append(rewritten)
+        data["jobs"] = updated_jobs
+        self.cron_file.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
     def _remove_job_from_file(self, job_id: str) -> None:
         if not self.cron_file.is_file():
             return
@@ -375,18 +471,13 @@ class CronScheduler:
             return
         jobs = data.get("jobs", [])
         data["jobs"] = [j for j in jobs if j.get("id") != job_id]
-        self.cron_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.cron_file.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         # Also clean up state file entry
         if self.state_file.is_file():
             try:
                 state_data = json.loads(self.state_file.read_text(encoding="utf-8"))
                 if job_id in state_data:
                     del state_data[job_id]
-                    self.state_file.write_text(json.dumps(state_data, ensure_ascii=False, indent=2), encoding="utf-8")
+                    self.state_file.write_text(json.dumps(state_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             except Exception:
                 pass
-            jobs = data.get("jobs") or []
-            data["jobs"] = [job for job in jobs if str(job.get("id")) != job_id]
-            self.cron_file.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        except Exception as exc:
-            self.on_event(f"failed to update CRON.json: {exc}")

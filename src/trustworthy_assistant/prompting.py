@@ -11,6 +11,7 @@ class PromptBuilder:
         skills_block: str = "",
         registered_tools_block: str = "",
         memory_context: str = "",
+        lessons_context: str = "",
         daily_digest_context: str = "",
         mode: str = "full",
         agent_id: str = "main",
@@ -38,6 +39,8 @@ class PromptBuilder:
                 parts.append(f"### Evergreen Memory\n\n{memory_md}")
             if memory_context:
                 parts.append(f"### Recalled Memories\n\n{memory_context}")
+            if lessons_context:
+                parts.append(f"### Learned Service Patterns\n\n{lessons_context}")
             if daily_digest_context:
                 parts.append(f"### Today's Digest\n\n{daily_digest_context}")
             if parts:

@@ -202,6 +202,7 @@ class ToolRegistry:
         self.workspace_dir = self.memory_service.repository.paths.workspace_dir
         self._current_channel: str = "terminal"
         self._current_user_id: str = "local"
+        self._current_agent_id: str = "main"
         self._latest_user_input: str = ""
         self._current_session_key: str = ""
         self._pending_command_approvals: dict[str, PendingCommandApproval] = {}
@@ -524,9 +525,11 @@ class ToolRegistry:
         user_id: str,
         latest_user_input: str = "",
         session_key: str = "",
+        agent_id: str = "main",
     ) -> None:
         self._current_channel = channel
         self._current_user_id = user_id
+        self._current_agent_id = agent_id or "main"
         self._latest_user_input = latest_user_input
         self._current_session_key = session_key
 
@@ -536,11 +539,23 @@ class ToolRegistry:
 
     def memory_write(self, content: str, category: str = "general") -> str:
         self.emit("memory_write", f"[{category}] {content[:60]}...")
-        return self.memory_service.write_memory(content, category)
+        return self.memory_service.write_memory(
+            content,
+            category,
+            agent_id=self._current_agent_id,
+            channel=self._current_channel,
+            user_id=self._current_user_id,
+        )
 
     def memory_search(self, query: str, top_k: int = 5) -> str:
         self.emit("memory_search", query)
-        results = self.memory_service.hybrid_search(query, top_k)
+        results = self.memory_service.hybrid_search(
+            query,
+            top_k,
+            agent_id=self._current_agent_id,
+            channel=self._current_channel,
+            user_id=self._current_user_id,
+        )
         if not results:
             return "No relevant memories found."
         return "\n".join(
