@@ -10,7 +10,7 @@ class SlashCommandResult:
     current_agent_id: str | None = None
 
 
-def _render_memory_command(memory_service, arg: str) -> str:
+def _render_memory_command(memory_service, arg: str, *, agent_id: str = "", channel: str = "", user_id: str = "") -> str:
     subparts = arg.split(maxsplit=1) if arg else []
     subcommand = subparts[0].lower() if subparts else "stats"
     subarg = subparts[1] if len(subparts) > 1 else ""
@@ -30,7 +30,7 @@ def _render_memory_command(memory_service, arg: str) -> str:
             ]
         )
     if subcommand == "list":
-        rows = memory_service.list_memories(limit=10)
+        rows = memory_service.list_memories(limit=10, agent_id=agent_id, channel=channel, user_id=user_id)
         if not rows:
             return "Ledger Memories\n- (无记忆)"
         lines = ["Ledger Memories"]
@@ -39,7 +39,7 @@ def _render_memory_command(memory_service, arg: str) -> str:
             lines.append(f"  {row['summary']}")
         return "\n".join(lines)
     if subcommand == "candidates":
-        rows = memory_service.list_candidates(limit=10)
+        rows = memory_service.list_candidates(limit=10, agent_id=agent_id, channel=channel, user_id=user_id)
         if not rows:
             return "Candidate Memories\n- (无候选记忆)"
         lines = ["Candidate Memories"]
@@ -50,7 +50,7 @@ def _render_memory_command(memory_service, arg: str) -> str:
     if subcommand == "trace":
         return "Last Retrieval Trace\n" + memory_service.format_last_trace()
     if subcommand == "conflicts":
-        rows = memory_service.list_conflicts(limit=10)
+        rows = memory_service.list_conflicts(limit=10, agent_id=agent_id, channel=channel, user_id=user_id)
         if not rows:
             return "Memory Conflicts\n- (无冲突)"
         lines = ["Memory Conflicts"]
@@ -83,6 +83,129 @@ def _render_memory_command(memory_service, arg: str) -> str:
     return "用法: /memory [stats|list|candidates|trace|conflicts|show <id>|confirm <id>|reject <id>|forget <id>|sync]"
 
 
+def _render_dream_command(app, arg: str, *, agent_id: str, channel: str, user_id: str) -> str:
+    subparts = arg.split(maxsplit=1) if arg else []
+    subcommand = subparts[0].lower() if subparts else "status"
+    subarg = subparts[1].strip() if len(subparts) > 1 else ""
+    if subcommand in {"", "status", "plans"}:
+        rows = app.dream_service.repository.load_plans(
+            agent_id=agent_id,
+            channel=channel,
+            user_id=user_id,
+            limit=10,
+        )
+        if not rows:
+            return "Nightly Dream Plans\n- (暂无 dream 计划)"
+        lines = ["Nightly Dream Plans"]
+        for row in rows:
+            lines.append(
+                f"- {row.get('job_id','-')} status={row.get('status','-')} target={row.get('target_date','-')}"
+            )
+            lines.append(f"  scheduled_for={row.get('scheduled_for','-')}")
+        return "\n".join(lines)
+    if subcommand == "runs":
+        rows = app.dream_service.repository.load_runs(
+            agent_id=agent_id,
+            channel=channel,
+            user_id=user_id,
+            limit=10,
+        )
+        if not rows:
+            return "Nightly Dream Runs\n- (暂无 dream 运行记录)"
+        lines = ["Nightly Dream Runs"]
+        for row in rows:
+            lines.append(
+                f"- {row.get('run_id','-')} status={row.get('status','-')} target={row.get('target_date','-')}"
+            )
+            lines.append(
+                f"  memories={row.get('new_memory_count',0)} lessons={row.get('new_lesson_count',0)} report={row.get('report_path','-') or '-'}"
+            )
+            if row.get("error"):
+                lines.append(f"  error: {row.get('error')}")
+        return "\n".join(lines)
+    if subcommand == "lessons":
+        active_rows = app.dream_service.repository.load_lessons(
+            agent_id=agent_id,
+            channel=channel,
+            user_id=user_id,
+            status="active",
+            limit=10,
+        )
+        archived_rows = app.dream_service.repository.load_lessons(
+            agent_id=agent_id,
+            channel=channel,
+            user_id=user_id,
+            status="archived",
+            limit=10,
+        )
+        if not active_rows and not archived_rows:
+            return "Nightly Dream Lessons\n- (暂无 lessons)"
+        lines = ["Nightly Dream Lessons", "Active:"]
+        if active_rows:
+            for row in active_rows:
+                lines.append(
+                    f"- {row.get('lesson_id','-')} [{row.get('scope','workflow')}] confidence={row.get('confidence',0)} importance={row.get('importance',0)}"
+                )
+                lines.append(f"  {row.get('summary','')}")
+        else:
+            lines.append("- (none)")
+        lines.append("Archived:")
+        if archived_rows:
+            for row in archived_rows:
+                lines.append(
+                    f"- {row.get('lesson_id','-')} [{row.get('scope','workflow')}] confidence={row.get('confidence',0)} importance={row.get('importance',0)}"
+                )
+                lines.append(f"  {row.get('summary','')}")
+        else:
+            lines.append("- (none)")
+        return "\n".join(lines)
+    if subcommand == "run":
+        result = app.dream_service.run_manual(
+            agent_id=agent_id,
+            channel=channel,
+            user_id=user_id,
+            target_date=subarg,
+        )
+        lines = [
+            "Nightly Dream Run",
+            f"- status={result.get('status','-')} target={result.get('target_date','-')}",
+            f"- memories={result.get('new_memory_count',0)} lessons={result.get('new_lesson_count',0)}",
+        ]
+        if result.get("report_path"):
+            lines.append(f"- report={result.get('report_path')}")
+        return "\n".join(lines)
+    if subcommand in {"report", "latest"}:
+        selector = "" if subcommand == "latest" else subarg
+        report = app.dream_service.get_report(
+            agent_id=agent_id,
+            channel=channel,
+            user_id=user_id,
+            target_date=selector,
+        )
+        if not report:
+            return "Nightly Dream Report\n- (暂无 dream report)"
+        return "\n".join(
+            [
+                f"Nightly Dream Report: {report.get('target_date','-')}",
+                str(report.get("report_path", "")),
+                str(report.get("content", "")).strip(),
+            ]
+        )
+    if subcommand == "prune":
+        summary = app.dream_service.prune_lessons(
+            agent_id=agent_id,
+            channel=channel,
+            user_id=user_id,
+        )
+        return "\n".join(
+            [
+                "Nightly Dream Prune",
+                f"- scanned={summary.get('scanned',0)} decayed={summary.get('decayed',0)} archived={summary.get('archived',0)}",
+            ]
+        )
+    return "用法: /dream [plans|runs|lessons|run [today|yesterday|YYYY-MM-DD]|report [today|yesterday|YYYY-MM-DD]|latest|prune]"
+
+
 def handle_slash_command(
     app,
     cmd: str,
@@ -109,7 +232,7 @@ def handle_slash_command(
             current_agent_id=current_agent_id,
             response=(
                 "可用命令:\n"
-                "/skills /memory /search /prompt /bootstrap /agents /switch /sessions /maintain /cron\n"
+                "/skills /memory /dream /search /prompt /bootstrap /agents /switch /sessions /maintain /cron\n"
                 "/yes /always /no /approvals\n"
                 "/supervisor /review /verify /workflow"
             ),
@@ -124,11 +247,38 @@ def handle_slash_command(
             lines.append(f"  path: {skill['path']}")
         return SlashCommandResult(True, "\n".join(lines), current_agent_id)
     if command == "/memory":
-        return SlashCommandResult(True, _render_memory_command(app.memory_service, arg), current_agent_id)
+        return SlashCommandResult(
+            True,
+            _render_memory_command(
+                app.memory_service,
+                arg,
+                agent_id=current_agent_id,
+                channel=channel,
+                user_id=user_id,
+            ),
+            current_agent_id,
+        )
+    if command == "/dream":
+        return SlashCommandResult(
+            True,
+            _render_dream_command(
+                app,
+                arg,
+                agent_id=current_agent_id,
+                channel=channel,
+                user_id=user_id,
+            ),
+            current_agent_id,
+        )
     if command == "/search":
         if not arg:
             return SlashCommandResult(True, "用法: /search <query>", current_agent_id)
-        results = app.memory_service.hybrid_search(arg)
+        results = app.memory_service.hybrid_search(
+            arg,
+            agent_id=current_agent_id,
+            channel=channel,
+            user_id=user_id,
+        )
         if not results:
             return SlashCommandResult(True, f"记忆搜索: {arg}\n- (无结果)", current_agent_id)
         lines = [f"记忆搜索: {arg}"]
@@ -143,7 +293,18 @@ def handle_slash_command(
             bootstrap=bootstrap_data,
             skills_block=app.skills_catalog.format_prompt_block(),
             registered_tools_block=app.tools.format_prompt_block(),
-            memory_context=app.turn_processor.build_memory_context("show prompt"),
+            memory_context=app.turn_processor.build_memory_context(
+                "show prompt",
+                channel=channel,
+                user_id=user_id,
+                agent_id=current_agent_id,
+            ),
+            lessons_context=app.turn_processor.build_lessons_context(
+                "show prompt",
+                channel=channel,
+                user_id=user_id,
+                agent_id=current_agent_id,
+            ),
             daily_digest_context=app.turn_processor.build_daily_digest_context(channel, user_id, current_agent_id),
             mode="full",
             agent_id=current_agent_id,

@@ -95,6 +95,7 @@ from trustworthy_assistant.memory.dream_service import DreamService
 from trustworthy_assistant.memory.dream_repository import DreamRepository
 from trustworthy_assistant.memory.service import TrustworthyMemoryService
 from trustworthy_assistant.runtime.cron import CronScheduler
+from trustworthy_assistant.slash_commands import handle_slash_command
 
 
 class _FakeBlock:
@@ -145,6 +146,123 @@ class _MaintainingDreamService:
     def prune_all_lessons(self):
         self.called = True
         return {"scopes": 2, "scanned": 3, "decayed": 1, "archived": 1}
+
+
+class _FakePromptBuilder:
+    def build(self, **kwargs):
+        return "\n".join(
+            [
+                f"memory={kwargs.get('memory_context', '')}",
+                f"lessons={kwargs.get('lessons_context', '')}",
+                f"digest={kwargs.get('daily_digest_context', '')}",
+                f"channel={kwargs.get('channel', '')}",
+            ]
+        )
+
+
+class _FakeBootstrapLoader:
+    def load_all(self, mode="full"):
+        return {}
+
+
+class _FakeSkillsCatalog:
+    def __init__(self) -> None:
+        self.skills = []
+
+    def discover(self):
+        return None
+
+    def format_prompt_block(self):
+        return ""
+
+
+class _FakeTools:
+    def format_prompt_block(self):
+        return ""
+
+    def approve_pending_command(self, session_key, remember=False):
+        return "approved"
+
+    def reject_pending_command(self, session_key):
+        return "rejected"
+
+    def format_pending_status_lines(self, session_key):
+        return []
+
+
+class _FakeSessionManager:
+    def build_session_key(self, *, agent_id: str, channel: str, user_id: str):
+        return f"{agent_id}:{channel}:{user_id}"
+
+    def list_sessions(self):
+        return []
+
+
+class _FakeTurnProcessor:
+    def __init__(self) -> None:
+        self.memory_calls = []
+        self.lesson_calls = []
+
+    def build_memory_context(self, user_message: str, *, channel: str, user_id: str, agent_id: str) -> str:
+        self.memory_calls.append((user_message, channel, user_id, agent_id))
+        return f"memory::{agent_id}::{channel}::{user_id}"
+
+    def build_lessons_context(self, user_message: str, *, channel: str, user_id: str, agent_id: str) -> str:
+        self.lesson_calls.append((user_message, channel, user_id, agent_id))
+        return f"lessons::{agent_id}::{channel}::{user_id}"
+
+    def build_daily_digest_context(self, channel: str, user_id: str, agent_id: str) -> str:
+        return f"digest::{agent_id}::{channel}::{user_id}"
+
+
+class _FakeAgentRegistry:
+    default_agent_id = "main"
+
+    def list_profiles(self):
+        return []
+
+    def get(self, agent_id: str):
+        return type("Profile", (), {"agent_id": agent_id, "name": agent_id, "personality": ""})()
+
+
+class _FakeMaintenanceService:
+    def run_once(self):
+        return type("Report", (), {"run_at": "now", "summary": "ok", "projection_path": "/tmp/proj"})()
+
+
+class _FakeSupervisorWorkflow:
+    def get_current_report(self):
+        return None
+
+    def verify(self):
+        return None
+
+
+class _FakeCronScheduler:
+    def list_jobs(self):
+        return []
+
+    def reload_jobs(self):
+        return 0
+
+    def run_job_now(self, job_id: str):
+        return True, f"cron job triggered: {job_id}"
+
+
+class _FakeApp:
+    def __init__(self, memory_service, dream_service):
+        self.memory_service = memory_service
+        self.dream_service = dream_service
+        self.prompt_builder = _FakePromptBuilder()
+        self.bootstrap_loader = _FakeBootstrapLoader()
+        self.skills_catalog = _FakeSkillsCatalog()
+        self.tools = _FakeTools()
+        self.session_manager = _FakeSessionManager()
+        self.turn_processor = _FakeTurnProcessor()
+        self.agent_registry = _FakeAgentRegistry()
+        self.maintenance_service = _FakeMaintenanceService()
+        self.supervisor_workflow = _FakeSupervisorWorkflow()
+        self.cron_scheduler = _FakeCronScheduler()
 
 
 def _build_memory_service(workspace_dir: Path) -> TrustworthyMemoryService:
@@ -661,6 +779,100 @@ class NightlyDreamTests(unittest.TestCase):
             self.assertTrue(service.called)
             jobs = scheduler.list_jobs()
             self.assertEqual(jobs[0]["last_status"], "ok")
+
+    def test_slash_prompt_uses_scoped_memory_and_lessons_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace_dir = Path(tmp_dir) / "workspace"
+            workspace_dir.mkdir(parents=True, exist_ok=True)
+            memory_service = _build_memory_service(workspace_dir)
+            dream_service = DreamService(
+                workspace_dir=workspace_dir,
+                memory_service=memory_service,
+                client=None,
+                model_id="test-model",
+            )
+            app = _FakeApp(memory_service, dream_service)
+            result = handle_slash_command(
+                app,
+                "/prompt",
+                channel="wechat",
+                user_id="user-a",
+                current_agent_id="main",
+            )
+            self.assertTrue(result.handled)
+            self.assertIn("memory::main::wechat::user-a", result.response)
+            self.assertIn("lessons::main::wechat::user-a", result.response)
+            self.assertEqual(len(app.turn_processor.memory_calls), 1)
+            self.assertEqual(len(app.turn_processor.lesson_calls), 1)
+
+    def test_slash_search_and_dream_latest_are_scoped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace_dir = Path(tmp_dir) / "workspace"
+            workspace_dir.mkdir(parents=True, exist_ok=True)
+            memory_service = _build_memory_service(workspace_dir)
+            dream_service = DreamService(
+                workspace_dir=workspace_dir,
+                memory_service=memory_service,
+                client=None,
+                model_id="test-model",
+            )
+            memory_service.upsert_memory(
+                "用户A在推进 nightly dream 功能",
+                category="project",
+                agent_id="main",
+                channel="wechat",
+                user_id="user-a",
+            )
+            memory_service.upsert_memory(
+                "用户B更喜欢英文回答",
+                category="language",
+                agent_id="main",
+                channel="wechat",
+                user_id="user-b",
+            )
+            scope_key = dream_service._scope_key("main", "wechat", "user-a")
+            report_path = dream_service.repository.write_report(
+                target_date="2026-04-21",
+                scope_key=scope_key,
+                content="# Nightly Dream Report\n\nwechat user-a latest\n",
+            )
+            dream_service.repository.append_run(
+                {
+                    "run_id": "run-wechat-a",
+                    "plan_id": "plan-wechat-a",
+                    "agent_id": "main",
+                    "channel": "wechat",
+                    "user_id": "user-a",
+                    "target_date": "2026-04-21",
+                    "started_at": "2026-04-22T03:00:00+08:00",
+                    "finished_at": "2026-04-22T03:10:00+08:00",
+                    "status": "ok",
+                    "report_path": report_path,
+                    "new_memory_count": 1,
+                    "new_lesson_count": 0,
+                    "error": "",
+                }
+            )
+            app = _FakeApp(memory_service, dream_service)
+            search_result = handle_slash_command(
+                app,
+                "/search nightly dream",
+                channel="wechat",
+                user_id="user-a",
+                current_agent_id="main",
+            )
+            self.assertTrue(search_result.handled)
+            self.assertIn("nightly dream", search_result.response.lower())
+            self.assertNotIn("英文回答", search_result.response)
+            latest_result = handle_slash_command(
+                app,
+                "/dream latest",
+                channel="wechat",
+                user_id="user-a",
+                current_agent_id="main",
+            )
+            self.assertTrue(latest_result.handled)
+            self.assertIn("wechat user-a latest", latest_result.response)
 
     def test_prune_lessons_decays_and_archives_old_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
