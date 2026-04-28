@@ -202,6 +202,7 @@ class _FakeTurnProcessor:
     def __init__(self) -> None:
         self.memory_calls = []
         self.lesson_calls = []
+        self.ops_calls = []
 
     def build_memory_context(self, user_message: str, *, channel: str, user_id: str, agent_id: str) -> str:
         self.memory_calls.append((user_message, channel, user_id, agent_id))
@@ -213,6 +214,10 @@ class _FakeTurnProcessor:
 
     def build_daily_digest_context(self, channel: str, user_id: str, agent_id: str) -> str:
         return f"digest::{agent_id}::{channel}::{user_id}"
+
+    def build_ops_context(self, *, channel: str, user_id: str, agent_id: str) -> str:
+        self.ops_calls.append((channel, user_id, agent_id))
+        return f"ops::{agent_id}::{channel}::{user_id}"
 
 
 class _FakeAgentRegistry:

@@ -743,8 +743,8 @@ class ILinkWeChatClient:
             )
             response.raise_for_status()
             return response.json()
-        except httpx.ReadTimeout:
-            return {"ret": 0, "msgs": [], "get_updates_buf": get_updates_buf}
+        except (httpx.ReadTimeout, httpx.ConnectTimeout):
+            return {"ret": 0, "msgs": [], "get_updates_buf": get_updates_buf, "error": "timeout"}
 
     def send_text(self, token: str, to_user_id: str, text: str, context_token: str) -> dict[str, Any]:
         payload = json.dumps(
@@ -1158,6 +1158,28 @@ class WeChatBotRunner:
         self._context_tokens: dict[str, str] = {}
         self._agent_overrides: dict[str, str] = {}
         self._instance_lock = None
+        self._poll_health = {
+            "status": "healthy",
+            "consecutive_failures": 0,
+            "last_error": "",
+            "last_ok_at": "",
+        }
+
+    def _handle_poll_result(self, updates: dict) -> float:
+        error = str((updates or {}).get("error") or "").strip()
+        if not error:
+            self._poll_health["status"] = "healthy"
+            self._poll_health["consecutive_failures"] = 0
+            self._poll_health["last_error"] = ""
+            self._poll_health["last_ok_at"] = _utcnow()
+            return 0.0
+        failures = int(self._poll_health.get("consecutive_failures") or 0) + 1
+        self._poll_health["status"] = "degraded"
+        self._poll_health["consecutive_failures"] = failures
+        self._poll_health["last_error"] = error
+        sleep_s = float(min(2 ** min(failures - 1, 3), 8))
+        self.on_event(f"poll degraded: error={error} failures={failures} backoff={sleep_s:.1f}s")
+        return sleep_s
 
     def _acquire_instance_lock(self, account_id: str) -> None:
         if self._instance_lock is not None:
@@ -1555,9 +1577,13 @@ class WeChatBotRunner:
         try:
             while True:
                 updates = client.get_updates(account.token, get_updates_buf=sync_buffer)
+                sleep_s = self._handle_poll_result(updates)
                 sync_buffer = str(updates.get("get_updates_buf") or sync_buffer)
                 save_sync_buffer(self.config.root_dir, account.account_id, sync_buffer)
                 messages = updates.get("msgs") or []
+                if not messages and sleep_s > 0:
+                    time.sleep(sleep_s)
+                    continue
                 for message in messages:
                     raw_item_list = (message or {}).get("item_list")
                     raw_item_summaries = []

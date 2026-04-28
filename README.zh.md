@@ -33,6 +33,7 @@
 - 🧠 **向量记忆**: 基于 embeddings 的语义检索能力
 - 💬 **WeCom 机器人**: 支持企业微信机器人接入
 - 💬 **个人微信机器人**: 支持 iLink / ClawBot 方式绑定个人微信
+- 💾 **原生文件写入**: 内置 `write_file`、`append_file`、`replace_in_file`、`make_directory`
 - 💰 **本地记账能力**: 支持收支记录、分类统计与账本汇总
 - 🛡️ **Supervisor 工作流**: 内置 plan / execute / review / verify 流程
 
@@ -57,6 +58,7 @@ trustworthy_assistant/
 │       │   └── service.py
 │       ├── runtime/           # 运行时能力
 │       │   ├── agents.py
+│       │   ├── cron.py
 │       │   ├── sessions.py
 │       │   ├── turns.py
 │       │   └── maintenance.py
@@ -74,6 +76,7 @@ trustworthy_assistant/
 │       ├── app.py             # 应用入口工厂
 │       ├── cli.py             # CLI 入口
 │       ├── config.py          # 配置管理
+│       ├── slash_commands.py  # CLI / 微信共用 slash 命令分发
 │       ├── run_wechat_bot.py  # 个人微信 Bot 启动入口
 │       ├── run_wechat_login.py # 个人微信扫码登录入口
 │       └── run_wecom_bot.py   # WeCom 启动入口
@@ -168,6 +171,14 @@ EMBEDDING_MODEL=text-embedding-3-small
 CHROMA_PERSIST_DIR=./chroma
 ```
 
+**可选配置：视觉识图**
+
+```env
+VISION_API_KEY=sk-xxxxx
+VISION_BASE_URL=https://api.openai.com/v1
+VISION_MODEL_ID=MiniMax-VL-01
+```
+
 **可选配置：企业微信机器人**
 
 ```env
@@ -204,7 +215,7 @@ python -m trustworthy_assistant.run_wecom_bot
 ```
 
 随后将企业微信 webhook 配置到 `http://your-domain:8000/wecom/webhook`。
-WeCom 进程也会自动启动 cron 调度器。
+WeCom 进程会自动启动 cron 调度器。
 
 ### 5. 扫码登录个人微信
 
@@ -222,9 +233,13 @@ trustworthy-wechat
 python -m trustworthy_assistant.run_wechat_bot
 ```
 
+个人微信 Bot 会在渠道运行器里启动 cron 调度器，并复用与 CLI 相同的 session、skills、memory 和 tool 流水线。
+
 ---
 
-## 📚 CLI 命令
+## 📚 CLI 与 Slash 命令
+
+CLI 支持以下命令。个人微信里现在也支持大部分 slash 命令，包括 `/memory`、`/skills`、`/search`、`/prompt`、`/agents`、`/switch`、`/sessions`、`/maintain`、`/cron` 以及审批命令。`/benchmarks` 仍然只在 CLI 中可用。
 
 ```text
 You > /memory stats         # 查看记忆统计
@@ -248,7 +263,7 @@ You > /cron                 # 查看 cron 调度状态
 You > /cron reload          # 从 CRON.json 重载任务
 You > /cron run <job_id>    # 立即触发一个 cron 任务
 You > /skills               # 列出技能
-You > /benchmarks           # 运行 benchmark
+You > /benchmarks           # 运行 benchmark（仅 CLI）
 You > /supervisor           # 查看 supervisor 状态
 You > /review               # 查看最近一次 review
 You > /verify               # 运行验证 gates
@@ -307,6 +322,7 @@ trustworthy-wecom
 - 使用 iLink / ClawBot 风格的 HTTP 接口
 - 登录态与上下文 token 保存在 `.wechat_personal/`
 - 支持文本、图片、文件，以及微信侧已转写的语音文本
+- 支持在微信中直接使用 `/memory`、`/skills`、`/cron`、`/agents`、`/switch` 等 slash 命令
 - 复用现有 `turn_processor` 和 session 链路
 
 ---
@@ -337,6 +353,8 @@ trustworthy-wecom
 - 查询今日、本周、本月账本
 - 按分类查看统计
 - 开启日/周/月账单推送
+
+项目还内置了 `workspace/skills/food-calorie-skill/SKILL.md`，用于让模型在收到食物照片时通过 `read_image` 估算热量区间。
 
 ### 自动账单
 
@@ -377,6 +395,19 @@ trustworthy-wecom
 | `BOOTSTRAP.md` | 额外启动上下文 |
 | `AGENTS.md` | Agent 配置 |
 | `CRON.json` | 定时任务配置 |
+
+### 运行时目录
+
+除了 bootstrap 文件，系统还会在 `workspace/` 下使用这些运行时目录：
+
+| 目录 | 作用 |
+|------|------|
+| `memory/ledger/` | 结构化长期记忆、事件、证据与检索轨迹 |
+| `memory/daily/` | 每日记忆日志 |
+| `memory/review/` | review 侧记忆相关文件 |
+| `bookkeeping/` | 本地账本数据 |
+| `skills/` | 当前工作区加载的本地技能 |
+| `chroma/` | 向量数据库持久化目录 |
 
 ---
 

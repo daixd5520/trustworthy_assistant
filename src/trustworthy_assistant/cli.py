@@ -484,6 +484,81 @@ def handle_dream_command(app, arg: str, current_agent_id: str) -> bool:
     return True
 
 
+def handle_ops_command(app, arg: str, current_agent_id: str) -> bool:
+    subparts = arg.split(maxsplit=1) if arg else []
+    subcommand = subparts[0].lower() if subparts else "list"
+    subarg = subparts[1].strip() if len(subparts) > 1 else ""
+    if subcommand in {"", "list"}:
+        print_section("Personal Ops")
+        rows = app.ops_service.list_commitments(
+            agent_id=current_agent_id,
+            channel="terminal",
+            user_id="local",
+            status="pending",
+            limit=10,
+        )
+        if not rows:
+            print(f"{DIM}(暂无 pending commitments){RESET}")
+            return True
+        for row in rows:
+            print(f"  {BLUE}{row.get('commitment_id','-')}{RESET} {row.get('title','')}")
+            if row.get("detail"):
+                print(f"    {row.get('detail','')}")
+        return True
+    if subcommand == "add":
+        if not subarg:
+            print(f"{YELLOW}用法: /ops add <title>{RESET}")
+            return True
+        created = app.ops_service.add_commitment(
+            title=subarg,
+            agent_id=current_agent_id,
+            channel="terminal",
+            user_id="local",
+            source="cli",
+        )
+        print(f"{GREEN}Added commitment: {created['commitment_id']} | {created['title']}{RESET}")
+        return True
+    if subcommand == "done":
+        if not subarg:
+            print(f"{YELLOW}用法: /ops done <commitment_id>{RESET}")
+            return True
+        ok, message = app.ops_service.complete_commitment(subarg)
+        print(f"{GREEN if ok else YELLOW}{message}{RESET}")
+        return True
+    if subcommand == "due":
+        parts = subarg.split(maxsplit=1) if subarg else []
+        if len(parts) != 2:
+            print(f"{YELLOW}用法: /ops due <commitment_id> <due_at>{RESET}")
+            return True
+        ok, message = app.ops_service.set_due_at(parts[0], parts[1])
+        print(f"{GREEN if ok else YELLOW}{message}{RESET}")
+        return True
+    if subcommand == "block":
+        parts = subarg.split(maxsplit=1) if subarg else []
+        if not parts:
+            print(f"{YELLOW}用法: /ops block <commitment_id> [reason]{RESET}")
+            return True
+        ok, message = app.ops_service.block_commitment(parts[0], reason=parts[1] if len(parts) > 1 else "")
+        print(f"{GREEN if ok else YELLOW}{message}{RESET}")
+        return True
+    if subcommand == "dismiss":
+        parts = subarg.split(maxsplit=1) if subarg else []
+        if not parts:
+            print(f"{YELLOW}用法: /ops dismiss <commitment_id> [reason]{RESET}")
+            return True
+        ok, message = app.ops_service.dismiss_commitment(parts[0], reason=parts[1] if len(parts) > 1 else "")
+        print(f"{GREEN if ok else YELLOW}{message}{RESET}")
+        return True
+    if subcommand == "extract":
+        if not subarg:
+            print(f"{YELLOW}用法: /ops extract <natural language text>{RESET}")
+            return True
+        print(app.ops_service.format_extraction_result(subarg))
+        return True
+    print(f"{YELLOW}用法: /ops [list|add <title>|done <commitment_id>|due <commitment_id> <due_at>|block <commitment_id> [reason]|dismiss <commitment_id> [reason]|extract <text>]{RESET}")
+    return True
+
+
 def handle_repl_command(app, cmd: str, bootstrap_data: dict[str, str], skills_block: str, current_agent_id: str) -> bool:
     parts = cmd.strip().split(maxsplit=1)
     command = parts[0].lower()
@@ -501,6 +576,8 @@ def handle_repl_command(app, cmd: str, bootstrap_data: dict[str, str], skills_bl
         return handle_memory_command(app.memory_service, arg)
     if command == "/dream":
         return handle_dream_command(app, arg, current_agent_id)
+    if command == "/ops":
+        return handle_ops_command(app, arg, current_agent_id)
     if command == "/search":
         if not arg:
             print(f"{YELLOW}用法: /search <query>{RESET}")
@@ -568,11 +645,12 @@ def run() -> None:
     print_info(f"  Model: {app.config.model_id}")
     print_info(f"  Workspace: {app.config.workspace_dir}")
     print_info(f"  Cron jobs loaded: {len(app.cron_scheduler.list_jobs())}")
-    print_info("  命令: /skills /memory /dream /search /prompt /bootstrap /agents /switch /sessions /maintain /cron /benchmarks")
+    print_info("  命令: /skills /memory /dream /ops /search /prompt /bootstrap /agents /switch /sessions /maintain /cron /benchmarks")
     print_info("  审批: /yes /always /no /approvals")
     print_info("  supervisor: /supervisor /review /verify /workflow")
     print_info("  memory 子命令: stats list candidates trace conflicts show confirm reject forget sync")
     print_info("  dream 子命令: plans runs lessons run [date] report [date] latest prune")
+    print_info("  ops 子命令: list add <title> done <commitment_id> due <id> <due_at> block <id> [reason] dismiss <id> [reason] extract <text>")
     print_info("=" * 64)
     try:
         while True:

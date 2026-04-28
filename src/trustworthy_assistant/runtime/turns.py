@@ -174,6 +174,7 @@ class TurnProcessor:
         session_manager: SessionManager,
         model_id: str,
         dream_service=None,
+        ops_service=None,
     ) -> None:
         self.client = client
         self.prompt_builder = prompt_builder
@@ -184,6 +185,7 @@ class TurnProcessor:
         self.session_manager = session_manager
         self.model_id = model_id
         self.dream_service = dream_service
+        self.ops_service = ops_service
 
     @staticmethod
     def _should_retry_provider_error(exc: Exception) -> bool:
@@ -281,6 +283,14 @@ class TurnProcessor:
         except Exception:
             return ""
 
+    def build_ops_context(self, *, channel: str, user_id: str, agent_id: str) -> str:
+        if self.ops_service is None:
+            return ""
+        try:
+            return self.ops_service.format_pending_context(agent_id=agent_id, channel=channel, user_id=user_id)
+        except Exception:
+            return ""
+
     def build_daily_digest_context(self, channel: str, user_id: str, agent_id: str) -> str:
         if channel == "cron":
             return self.memory_service.format_daily_digest_context(agent_id=agent_id)
@@ -352,6 +362,7 @@ class TurnProcessor:
         )
         memory_context = self.build_memory_context(user_input, channel=channel, user_id=user_id, agent_id=agent.agent_id)
         lessons_context = self.build_lessons_context(user_input, channel=channel, user_id=user_id, agent_id=agent.agent_id)
+        ops_context = self.build_ops_context(channel=channel, user_id=user_id, agent_id=agent.agent_id)
         daily_digest_context = self.build_daily_digest_context(channel, user_id, agent.agent_id)
         system_prompt = self.prompt_builder.build(
             bootstrap=bootstrap_data,
@@ -359,6 +370,7 @@ class TurnProcessor:
             registered_tools_block=self.tool_registry.format_prompt_block(),
             memory_context=memory_context,
             lessons_context=lessons_context,
+            ops_context=ops_context,
             daily_digest_context=daily_digest_context,
             mode=agent.prompt_mode,
             agent_id=agent.agent_id,
@@ -490,6 +502,7 @@ class TurnProcessor:
         )
         memory_context = self.build_memory_context(user_input, channel=channel, user_id=user_id, agent_id=agent.agent_id)
         lessons_context = self.build_lessons_context(user_input, channel=channel, user_id=user_id, agent_id=agent.agent_id)
+        ops_context = self.build_ops_context(channel=channel, user_id=user_id, agent_id=agent.agent_id)
         daily_digest_context = self.build_daily_digest_context(channel, user_id, agent.agent_id)
         system_prompt = self.prompt_builder.build(
             bootstrap=bootstrap_data,
@@ -497,6 +510,7 @@ class TurnProcessor:
             registered_tools_block=self.tool_registry.format_prompt_block(),
             memory_context=memory_context,
             lessons_context=lessons_context,
+            ops_context=ops_context,
             daily_digest_context=daily_digest_context,
             mode=agent.prompt_mode,
             agent_id=agent.agent_id,

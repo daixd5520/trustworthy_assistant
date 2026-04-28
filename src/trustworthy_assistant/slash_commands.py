@@ -206,6 +206,67 @@ def _render_dream_command(app, arg: str, *, agent_id: str, channel: str, user_id
     return "用法: /dream [plans|runs|lessons|run [today|yesterday|YYYY-MM-DD]|report [today|yesterday|YYYY-MM-DD]|latest|prune]"
 
 
+def _render_ops_command(app, arg: str, *, agent_id: str, channel: str, user_id: str) -> str:
+    subparts = arg.split(maxsplit=1) if arg else []
+    subcommand = subparts[0].lower() if subparts else "list"
+    subarg = subparts[1].strip() if len(subparts) > 1 else ""
+    if subcommand in {"", "list"}:
+        rows = app.ops_service.list_commitments(
+            agent_id=agent_id,
+            channel=channel,
+            user_id=user_id,
+            status="pending",
+            limit=10,
+        )
+        if not rows:
+            return "Personal Ops\n- (暂无 pending commitments)"
+        lines = ["Personal Ops"]
+        for row in rows:
+            lines.append(f"- {row.get('commitment_id','-')} {row.get('title','')}")
+            if row.get("detail"):
+                lines.append(f"  {row.get('detail','')}")
+        return "\n".join(lines)
+    if subcommand == "add":
+        if not subarg:
+            return "用法: /ops add <title>"
+        created = app.ops_service.add_commitment(
+            title=subarg,
+            agent_id=agent_id,
+            channel=channel,
+            user_id=user_id,
+            source="slash_command",
+        )
+        return f"Added commitment: {created['commitment_id']} | {created['title']}"
+    if subcommand == "done":
+        if not subarg:
+            return "用法: /ops done <commitment_id>"
+        ok, message = app.ops_service.complete_commitment(subarg)
+        return message if ok else f"失败: {message}"
+    if subcommand == "due":
+        parts = subarg.split(maxsplit=1) if subarg else []
+        if len(parts) != 2:
+            return "用法: /ops due <commitment_id> <due_at>"
+        ok, message = app.ops_service.set_due_at(parts[0], parts[1])
+        return message if ok else f"失败: {message}"
+    if subcommand == "block":
+        parts = subarg.split(maxsplit=1) if subarg else []
+        if not parts:
+            return "用法: /ops block <commitment_id> [reason]"
+        ok, message = app.ops_service.block_commitment(parts[0], reason=parts[1] if len(parts) > 1 else "")
+        return message if ok else f"失败: {message}"
+    if subcommand == "dismiss":
+        parts = subarg.split(maxsplit=1) if subarg else []
+        if not parts:
+            return "用法: /ops dismiss <commitment_id> [reason]"
+        ok, message = app.ops_service.dismiss_commitment(parts[0], reason=parts[1] if len(parts) > 1 else "")
+        return message if ok else f"失败: {message}"
+    if subcommand == "extract":
+        if not subarg:
+            return "用法: /ops extract <natural language text>"
+        return app.ops_service.format_extraction_result(subarg)
+    return "用法: /ops [list|add <title>|done <commitment_id>|due <commitment_id> <due_at>|block <commitment_id> [reason]|dismiss <commitment_id> [reason]|extract <text>]"
+
+
 def handle_slash_command(
     app,
     cmd: str,
@@ -232,7 +293,7 @@ def handle_slash_command(
             current_agent_id=current_agent_id,
             response=(
                 "可用命令:\n"
-                "/skills /memory /dream /search /prompt /bootstrap /agents /switch /sessions /maintain /cron\n"
+                "/skills /memory /dream /ops /search /prompt /bootstrap /agents /switch /sessions /maintain /cron\n"
                 "/yes /always /no /approvals\n"
                 "/supervisor /review /verify /workflow"
             ),
@@ -262,6 +323,18 @@ def handle_slash_command(
         return SlashCommandResult(
             True,
             _render_dream_command(
+                app,
+                arg,
+                agent_id=current_agent_id,
+                channel=channel,
+                user_id=user_id,
+            ),
+            current_agent_id,
+        )
+    if command == "/ops":
+        return SlashCommandResult(
+            True,
+            _render_ops_command(
                 app,
                 arg,
                 agent_id=current_agent_id,
@@ -301,6 +374,11 @@ def handle_slash_command(
             ),
             lessons_context=app.turn_processor.build_lessons_context(
                 "show prompt",
+                channel=channel,
+                user_id=user_id,
+                agent_id=current_agent_id,
+            ),
+            ops_context=app.turn_processor.build_ops_context(
                 channel=channel,
                 user_id=user_id,
                 agent_id=current_agent_id,

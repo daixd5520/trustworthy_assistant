@@ -13,6 +13,7 @@ class PromptBuilder:
         memory_context: str = "",
         lessons_context: str = "",
         daily_digest_context: str = "",
+        ops_context: str = "",
         mode: str = "full",
         agent_id: str = "main",
         channel: str = "terminal",
@@ -43,6 +44,8 @@ class PromptBuilder:
                 parts.append(f"### Learned Service Patterns\n\n{lessons_context}")
             if daily_digest_context:
                 parts.append(f"### Today's Digest\n\n{daily_digest_context}")
+            if ops_context:
+                parts.append(f"### Pending Commitments\n\n{ops_context}")
             if parts:
                 sections.append("## Memory\n\n" + "\n\n".join(parts))
             sections.append(

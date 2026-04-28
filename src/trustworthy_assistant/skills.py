@@ -20,7 +20,10 @@ class SkillsCatalog:
             if ":" not in line:
                 continue
             key, _, value = line.strip().partition(":")
-            meta[key.strip()] = value.strip()
+            normalized = value.strip()
+            if len(normalized) >= 2 and normalized[0] == normalized[-1] and normalized[0] in {'"', "'"}:
+                normalized = normalized[1:-1]
+            meta[key.strip()] = normalized
         return meta
 
     def _scan_dir(self, base: Path) -> list[dict[str, str]]:

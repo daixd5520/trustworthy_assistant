@@ -33,7 +33,9 @@
 - 🧠 **Vector Memory** - Semantic search using embeddings (OpenAI + ChromaDB)
 - 💬 **WeCom Bot** - Enterprise WeChat integration as a new channel
 - 💬 **Personal WeChat Bot** - iLink / ClawBot bridge for personal WeChat login
-- 🛡️ **Supervisor Workflow** - Plan-execute-review-verify with policies and gates
+- **Native File Editing** - Built-in `write_file`, `append_file`, `replace_in_file`, and `make_directory`
+- 💰 **Local Bookkeeping** - Personal ledger entries, summaries, and scheduled reports
+- **Supervisor Workflow** - Plan-execute-review-verify with policies and gates
 
 ---
 
@@ -46,6 +48,7 @@ trustworthy_assistant/
 │       ├── channels/          # Multi-channel support
 │       │   └── wecom.py       # WeCom (Enterprise WeChat) integration
 │       │   └── wechat.py      # Personal WeChat iLink integration
+│       ├── bookkeeping.py     # Local ledger and scheduled reports
 │       ├── memory/            # Trustworthy Memory System
 │       │   ├── models.py      # Memory data models
 │       │   ├── repository.py  # Memory persistence (ledger)
@@ -55,6 +58,7 @@ trustworthy_assistant/
 │       │   └── service.py     # Main memory service
 │       ├── runtime/           # Core runtime
 │       │   ├── agents.py      # Agent registry & profiles
+│       │   ├── cron.py        # Cron scheduler and reminders
 │       │   ├── sessions.py    # Session management
 │       │   ├── turns.py       # Turn processor (with streaming!)
 │       │   └── maintenance.py # Maintenance service
@@ -72,6 +76,7 @@ trustworthy_assistant/
 │       ├── app.py             # Application factory
 │       ├── cli.py             # CLI interface
 │       ├── config.py          # Configuration management
+│       ├── slash_commands.py  # Shared slash command router for CLI / WeChat
 │       ├── run_wechat_bot.py  # Personal WeChat bot entrypoint
 │       ├── run_wechat_login.py # Personal WeChat login entrypoint
 │       └── run_wecom_bot.py   # WeCom bot entrypoint
@@ -172,6 +177,13 @@ EMBEDDING_MODEL=text-embedding-3-small
 CHROMA_PERSIST_DIR=./chroma
 ```
 
+**Optional (Vision / Image Understanding):**
+```env
+VISION_API_KEY=sk-xxxxx
+VISION_BASE_URL=https://api.openai.com/v1
+VISION_MODEL_ID=MiniMax-VL-01
+```
+
 **Optional (WeCom Bot):**
 ```env
 WECOM_CORP_ID=wwxxxxxxxxx
@@ -203,7 +215,7 @@ python -m trustworthy_assistant.run_wecom_bot
 ```
 
 Then configure your WeCom webhook URL: `http://your-domain:8000/wecom/webhook`
-The WeCom process also starts the cron scheduler automatically.
+The WeCom process starts the cron scheduler automatically.
 
 ### 5. Login Personal WeChat
 ```bash
@@ -219,9 +231,13 @@ trustworthy-wechat
 python -m trustworthy_assistant.run_wechat_bot
 ```
 
+The personal WeChat bot starts the cron scheduler from the channel runner and reuses the same session, skills, memory, and tool pipeline as the CLI.
+
 ---
 
-## 📚 CLI Commands
+## 📚 CLI & Slash Commands
+
+The CLI supports the following commands. Most of them are also available as slash commands inside personal WeChat, including `/memory`, `/skills`, `/search`, `/prompt`, `/agents`, `/switch`, `/sessions`, `/maintain`, `/cron`, and approval commands. `/benchmarks` remains CLI-only.
 
 ```text
 You > /memory stats         # Show memory statistics
@@ -245,7 +261,7 @@ You > /cron                # Show cron scheduler status
 You > /cron reload         # Reload jobs from CRON.json
 You > /cron run <job_id>   # Trigger a cron job immediately
 You > /skills              # List discovered skills
-You > /benchmarks          # Run benchmark suite
+You > /benchmarks          # Run benchmark suite (CLI only)
 You > /supervisor          # Show supervisor status
 You > /review              # Show last review findings
 You > /verify              # Run verification gates
@@ -300,8 +316,47 @@ trustworthy-wecom
 ### Notes
 - Uses the iLink / ClawBot HTTP bridge style API
 - Stores account state under `.wechat_personal/`
-- Supports text messages, quoted replies, and image understanding via the built-in `read_image` tool
+- Supports text, quoted replies, image understanding, file handling, and voice messages when WeChat already provides transcript text
+- Supports slash commands such as `/memory`, `/skills`, `/cron`, `/agents`, and `/switch`
 - Reuses the same `turn_processor` and session pipeline as the CLI
+
+---
+
+## 💰 Bookkeeping
+
+The project includes a lightweight local bookkeeping workflow for personal use in the CLI or WeChat.
+
+### Data Storage
+- Ledger entries are stored in `workspace/bookkeeping/ledger.jsonl`
+- Each row tracks timestamp, amount, type, category, note, source, channel, and user ID
+- Supported entry types: `expense` and `income`
+
+### Bookkeeping Tools
+
+| Tool | Purpose |
+|------|---------|
+| `ledger_add_entry` | Record one income or expense item |
+| `ledger_report` | Summarize today, this week, this month, last week, or last month |
+| `ledger_configure_reports` | Configure automatic daily, weekly, and monthly ledger pushes |
+
+### Included Skills
+- `workspace/skills/bookkeeping-skill/` for expense tracking and scheduled reports
+- `workspace/skills/food-calorie-skill/` for lightweight food-photo calorie estimation using `read_image`
+
+### Default Scheduled Reports
+- Daily report: `23:00`
+- Weekly report: Sunday `23:00`
+- Monthly report: day 1 at `00:05`, reporting the previous month
+
+---
+
+## 🖼️ Image Skills
+
+The built-in `read_image` tool can be paired with local skills for higher-level tasks.
+
+- `food-calorie-skill` estimates meal calories from photos with an uncertainty range
+- Image analysis can also be used for screenshots, OCR, document snapshots, and UI review
+- This lightweight calorie workflow does not use an external nutrition database yet, so it returns conservative estimates instead of exact nutrition facts
 
 ---
 
@@ -321,6 +376,19 @@ The assistant reads bootstrap files from the workspace directory:
 | `BOOTSTRAP.md` | Additional bootstrap content |
 | `AGENTS.md` | Agent configuration |
 | `CRON.json` | Scheduled cron tasks |
+
+### Runtime Data Directories
+
+The assistant also creates and uses runtime data under `workspace/`:
+
+| Directory | Purpose |
+|-----------|---------|
+| `memory/ledger/` | Structured long-term memory records, events, traces, and evidence |
+| `memory/daily/` | Daily memory log files |
+| `memory/review/` | Review-side memory artifacts |
+| `bookkeeping/` | Personal ledger storage |
+| `skills/` | Local prompt-style skills loaded at runtime |
+| `chroma/` | Optional local vector database persistence |
 
 ---
 

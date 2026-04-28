@@ -8,6 +8,7 @@ from trustworthy_assistant.config import AppConfig, load_config
 from trustworthy_assistant.eval.benchmarks import BenchmarkSuite
 from trustworthy_assistant.memory.dream_service import DreamService
 from trustworthy_assistant.memory.service import TrustworthyMemoryService
+from trustworthy_assistant.ops.service import PersonalOpsService
 from trustworthy_assistant.prompting import PromptBuilder
 from trustworthy_assistant.runtime.agents import AgentRegistry
 from trustworthy_assistant.runtime.cron import CronScheduler
@@ -32,6 +33,7 @@ class TrustworthyAssistantApp:
     maintenance_service: MaintenanceService
     benchmark_suite: BenchmarkSuite
     dream_service: DreamService
+    ops_service: PersonalOpsService
     turn_processor: TurnProcessor
     tools: ToolRegistry
     client: Anthropic
@@ -59,6 +61,7 @@ def build_app(root_dir=None, on_tool=None, on_cron_event=None, channel_sender=No
     maintenance_service = MaintenanceService(memory_service)
     benchmark_suite = BenchmarkSuite()
     supervisor_workflow = SupervisorWorkflow()
+    ops_service = PersonalOpsService(config.workspace_dir)
     dream_service = DreamService(
         workspace_dir=config.workspace_dir,
         memory_service=memory_service,
@@ -109,6 +112,7 @@ def build_app(root_dir=None, on_tool=None, on_cron_event=None, channel_sender=No
         session_manager=session_manager,
         model_id=config.model_id,
         dream_service=dream_service,
+        ops_service=ops_service,
     )
 
     cron_scheduler = CronScheduler(
@@ -135,6 +139,7 @@ def build_app(root_dir=None, on_tool=None, on_cron_event=None, channel_sender=No
         maintenance_service=maintenance_service,
         benchmark_suite=benchmark_suite,
         dream_service=dream_service,
+        ops_service=ops_service,
         turn_processor=turn_processor,
         tools=tools,
         client=client,

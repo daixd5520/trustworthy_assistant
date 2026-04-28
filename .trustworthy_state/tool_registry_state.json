@@ -17,6 +17,22 @@
       "timeout_seconds": 15,
       "max_output_chars": 4000,
       "created_at": "2026-04-17T09:00:32.013066"
+    },
+    "agent:main:wechat:o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat": {
+      "session_key": "agent:main:wechat:o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat",
+      "command": "sed -n '160,195p' /Users/bytedance/Documents/trae/trustworthy_assistant/workspace/CRON.json",
+      "argv": [
+        "sed",
+        "-n",
+        "160,195p",
+        "/Users/bytedance/Documents/trae/trustworthy_assistant/workspace/CRON.json"
+      ],
+      "cwd": "/Users/bytedance/Documents/trae/trustworthy_assistant/workspace",
+      "risk": "medium",
+      "reason": "requires explicit user confirmation",
+      "timeout_seconds": 20,
+      "max_output_chars": 4000,
+      "created_at": "2026-04-28T15:24:22.863923"
     }
   },
   "approved_command_prefixes": {
