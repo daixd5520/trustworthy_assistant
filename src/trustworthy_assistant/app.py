@@ -43,6 +43,7 @@ class TrustworthyAssistantApp:
 
 def build_app(root_dir=None, on_tool=None, on_cron_event=None, channel_sender=None) -> TrustworthyAssistantApp:
     config = load_config(root_dir)
+    state_dir = config.root_dir / ".trustworthy_state"
     memory_service = TrustworthyMemoryService(
         config.workspace_dir,
         openai_api_key=config.openai_api_key,
@@ -53,7 +54,7 @@ def build_app(root_dir=None, on_tool=None, on_cron_event=None, channel_sender=No
     bookkeeping_service = BookkeepingService(config.workspace_dir)
     config.benchmark_dir.mkdir(parents=True, exist_ok=True)
     agent_registry = AgentRegistry()
-    session_manager = SessionManager()
+    session_manager = SessionManager(state_file=state_dir / "sessions.json")
     client = Anthropic(api_key=config.anthropic_api_key, base_url=config.anthropic_base_url)
     bootstrap_loader = BootstrapLoader(config)
     skills_catalog = SkillsCatalog(config)
@@ -99,7 +100,7 @@ def build_app(root_dir=None, on_tool=None, on_cron_event=None, channel_sender=No
         vision_base_url=config.vision_base_url,
         vision_model_id=config.vision_model_id,
         supervisor_workflow=supervisor_workflow,
-        state_dir=config.root_dir / ".trustworthy_state",
+        state_dir=state_dir,
     )
 
     turn_processor = TurnProcessor(
