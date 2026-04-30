@@ -148,6 +148,15 @@ class _MaintainingDreamService:
         return {"scopes": 2, "scanned": 3, "decayed": 1, "archived": 1}
 
 
+class _CapturingTurnProcessor:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def process_turn(self, message, **kwargs):
+        self.calls.append({"message": message, **kwargs})
+        return type("Result", (), {"assistant_text": "ok", "errors": []})()
+
+
 class _FakePromptBuilder:
     def build(self, **kwargs):
         return "\n".join(
@@ -784,6 +793,48 @@ class NightlyDreamTests(unittest.TestCase):
             self.assertTrue(service.called)
             jobs = scheduler.list_jobs()
             self.assertEqual(jobs[0]["last_status"], "ok")
+
+    def test_agent_turn_job_uses_target_scope_for_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace_dir = Path(tmp_dir)
+            cron_payload = {
+                "jobs": [
+                    {
+                        "id": "daily-digest",
+                        "name": "Daily Digest",
+                        "enabled": True,
+                        "channel": "wechat",
+                        "sender_id": "user-a",
+                        "schedule": {"kind": "cron", "expr": "30 18 * * *", "tz": "UTC"},
+                        "payload": {
+                            "kind": "agent_turn",
+                            "message": "生成今日聊天摘要",
+                            "agent_id": "main",
+                        },
+                        "delete_after_run": False,
+                    }
+                ]
+            }
+            (workspace_dir / "CRON.json").write_text(json.dumps(cron_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            turn_processor = _CapturingTurnProcessor()
+            scheduler = CronScheduler(
+                workspace_dir,
+                _DummyRegistry(),
+                turn_processor=turn_processor,
+                dream_service=None,
+            )
+            scheduler.reload_jobs()
+            scheduler._execute_job(
+                job_id="daily-digest",
+                scheduled_for=datetime(2026, 4, 21, 18, 30, 0, tzinfo=timezone.utc),
+                manual=False,
+            )
+            self.assertEqual(len(turn_processor.calls), 1)
+            call = turn_processor.calls[0]
+            self.assertEqual(call["channel"], "cron")
+            self.assertEqual(call["user_id"], "daily-digest")
+            self.assertEqual(call["context_channel"], "wechat")
+            self.assertEqual(call["context_user_id"], "user-a")
 
     def test_slash_prompt_uses_scoped_memory_and_lessons_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

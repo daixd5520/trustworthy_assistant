@@ -53,7 +53,8 @@ class PromptBuilder:
                 "- Use memory_write to save important user facts and preferences.\n"
                 "- Reference remembered facts naturally in conversation.\n"
                 "- Use memory_search to recall specific past information.\n"
-                "- Use Today's Digest as the primary source for same-day summaries across restarts."
+                "- Use Today's Digest as the primary source for same-day summaries across restarts.\n"
+                "- Do not claim that workspace chat log files are missing. Same-day conversation history comes from Today's Digest in memory; if it is empty, say that no same-day digest is available yet."
             )
         sections.append(
             "## Interaction Style\n\n"

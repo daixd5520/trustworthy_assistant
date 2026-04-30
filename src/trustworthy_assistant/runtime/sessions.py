@@ -54,6 +54,28 @@ class SessionManager:
             self._trim_session(session)
             self._save_state()
 
+    def sanitize_orphan_tool_results(self, session_key: str) -> int:
+        with self._lock:
+            session = self._sessions.get(session_key)
+            if session is None:
+                return 0
+            removed = self._sanitize_orphan_tool_results_in_session(session)
+            if removed:
+                session.last_active_at = datetime.now(timezone.utc).isoformat()
+                self._save_state()
+            return removed
+
+    def strip_tool_protocol_messages(self, session_key: str) -> int:
+        with self._lock:
+            session = self._sessions.get(session_key)
+            if session is None:
+                return 0
+            removed = self._strip_tool_protocol_in_session(session)
+            if removed:
+                session.last_active_at = datetime.now(timezone.utc).isoformat()
+                self._save_state()
+            return removed
+
     def list_sessions(self) -> list[dict]:
         with self._lock:
             rows = []
@@ -76,6 +98,7 @@ class SessionManager:
             session.messages.pop(0)
         while len(session.messages) > 1 and self._session_char_count(session) > self._max_chars_per_session:
             session.messages.pop(0)
+        self._sanitize_orphan_tool_results_in_session(session)
 
     def _session_char_count(self, session: SessionState) -> int:
         total = 0
@@ -164,6 +187,7 @@ class SessionManager:
                         }
                     )
             self._trim_session(state)
+            self._sanitize_orphan_tool_results_in_session(state)
             self._sessions[session_key] = state
 
     def _save_state(self) -> None:
@@ -188,3 +212,79 @@ class SessionManager:
             self._state_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         except OSError:
             return
+
+    @staticmethod
+    def _assistant_tool_use_ids(content: Any) -> list[str]:
+        if not isinstance(content, list):
+            return []
+        ids: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type") or "") != "tool_use":
+                continue
+            tool_id = str(item.get("id") or "").strip()
+            if tool_id:
+                ids.append(tool_id)
+        return ids
+
+    @staticmethod
+    def _sanitize_orphan_tool_results_in_session(session: SessionState) -> int:
+        available_tool_ids: set[str] = set()
+        cleaned_messages: list[dict] = []
+        removed = 0
+        for message in session.messages:
+            role = str(message.get("role") or "")
+            content = message.get("content")
+            if role == "assistant":
+                for tool_id in SessionManager._assistant_tool_use_ids(content):
+                    available_tool_ids.add(tool_id)
+                cleaned_messages.append(message)
+                continue
+            if role == "user" and isinstance(content, list):
+                filtered_content = []
+                local_removed = 0
+                for item in content:
+                    if not isinstance(item, dict) or str(item.get("type") or "") != "tool_result":
+                        filtered_content.append(item)
+                        continue
+                    tool_id = str(item.get("tool_use_id") or "").strip()
+                    if tool_id and tool_id in available_tool_ids:
+                        filtered_content.append(item)
+                        available_tool_ids.discard(tool_id)
+                    else:
+                        local_removed += 1
+                removed += local_removed
+                if filtered_content:
+                    cleaned_messages.append({"role": role, "content": filtered_content})
+                elif local_removed == 0:
+                    cleaned_messages.append(message)
+                continue
+            cleaned_messages.append(message)
+        if removed:
+            session.messages = cleaned_messages
+        return removed
+
+    @staticmethod
+    def _strip_tool_protocol_in_session(session: SessionState) -> int:
+        cleaned_messages: list[dict] = []
+        removed = 0
+        for message in session.messages:
+            role = str(message.get("role") or "")
+            content = message.get("content")
+            if isinstance(content, list):
+                filtered_content = []
+                for item in content:
+                    if isinstance(item, dict) and str(item.get("type") or "") in {"tool_use", "tool_result"}:
+                        removed += 1
+                        continue
+                    filtered_content.append(item)
+                if filtered_content:
+                    cleaned_messages.append({"role": role, "content": filtered_content})
+                elif not any(isinstance(item, dict) and str(item.get("type") or "") in {"tool_use", "tool_result"} for item in content):
+                    cleaned_messages.append(message)
+            else:
+                cleaned_messages.append(message)
+        if removed:
+            session.messages = cleaned_messages
+        return removed

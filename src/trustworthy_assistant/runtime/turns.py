@@ -204,6 +204,11 @@ class TurnProcessor:
         )
         return any(marker in message for marker in retry_markers)
 
+    @staticmethod
+    def _is_invalid_tool_result_error(exc: Exception) -> bool:
+        message = str(exc).lower()
+        return "tool result's tool id" in message or "(2013)" in message
+
     def _create_message_with_retry(self, *, model: str, system_prompt: str, messages, max_attempts: int = 3):
         last_exc: Exception | None = None
         for attempt in range(1, max_attempts + 1):
@@ -347,9 +352,14 @@ class TurnProcessor:
         channel: str = "terminal",
         user_id: str = "local",
         on_progress: Optional[Callable[[str], None]] = None,
+        context_channel: str = "",
+        context_user_id: str = "",
     ) -> TurnResult:
         session = self.session_manager.get_or_create(agent.agent_id, channel=channel, user_id=user_id)
-        self.tool_registry.set_channel_context(channel, user_id, user_input, session.session_key, agent.agent_id)
+        scope_channel = context_channel or channel
+        scope_user_id = context_user_id or user_id
+        prompt_channel = scope_channel or channel
+        self.tool_registry.set_channel_context(scope_channel, scope_user_id, user_input, session.session_key, agent.agent_id)
         bootstrap_data = self.bootstrap_loader.load_all(mode=agent.prompt_mode)
         self.skills_catalog.discover()
         skills_block = self.skills_catalog.format_prompt_block()
@@ -360,10 +370,20 @@ class TurnProcessor:
             channel=channel,
             user_id=user_id,
         )
-        memory_context = self.build_memory_context(user_input, channel=channel, user_id=user_id, agent_id=agent.agent_id)
-        lessons_context = self.build_lessons_context(user_input, channel=channel, user_id=user_id, agent_id=agent.agent_id)
-        ops_context = self.build_ops_context(channel=channel, user_id=user_id, agent_id=agent.agent_id)
-        daily_digest_context = self.build_daily_digest_context(channel, user_id, agent.agent_id)
+        memory_context = self.build_memory_context(
+            user_input,
+            channel=scope_channel,
+            user_id=scope_user_id,
+            agent_id=agent.agent_id,
+        )
+        lessons_context = self.build_lessons_context(
+            user_input,
+            channel=scope_channel,
+            user_id=scope_user_id,
+            agent_id=agent.agent_id,
+        )
+        ops_context = self.build_ops_context(channel=scope_channel, user_id=scope_user_id, agent_id=agent.agent_id)
+        daily_digest_context = self.build_daily_digest_context(scope_channel, scope_user_id, agent.agent_id)
         system_prompt = self.prompt_builder.build(
             bootstrap=bootstrap_data,
             skills_block=skills_block,
@@ -374,12 +394,14 @@ class TurnProcessor:
             daily_digest_context=daily_digest_context,
             mode=agent.prompt_mode,
             agent_id=agent.agent_id,
-            channel=channel,
+            channel=prompt_channel,
         )
         self.session_manager.append(session.session_key, "user", user_input)
+        self.session_manager.sanitize_orphan_tool_results(session.session_key)
         tool_roundtrips = 0
         errors: list[str] = []
         progress_tracker = ProgressTracker(user_input)
+        tool_state_recovery_attempted = False
         while True:
             try:
                 response = self._create_message_with_retry(
@@ -388,6 +410,16 @@ class TurnProcessor:
                     messages=session.messages,
                 )
             except Exception as exc:
+                if self._is_invalid_tool_result_error(exc) and not tool_state_recovery_attempted:
+                    removed_orphans = self.session_manager.sanitize_orphan_tool_results(session.session_key)
+                    removed_protocol = 0
+                    if removed_orphans == 0:
+                        removed_protocol = self.session_manager.strip_tool_protocol_messages(session.session_key)
+                    if removed_orphans or removed_protocol:
+                        tool_state_recovery_attempted = True
+                        recovered = removed_orphans + removed_protocol
+                        errors.append(f"auto-recovered malformed tool state: dropped {recovered} stale item(s)")
+                        continue
                 errors.append(str(exc))
                 result = TurnResult(
                     agent_id=agent.agent_id,
@@ -486,10 +518,21 @@ class TurnProcessor:
             )
             return result
     
-    def process_turn_stream(self, user_input: str, agent: AgentProfile, channel: str = "terminal", 
-                           user_id: str = "local", on_text: Optional[Callable[[str], None]] = None) -> TurnResult:
+    def process_turn_stream(
+        self,
+        user_input: str,
+        agent: AgentProfile,
+        channel: str = "terminal",
+        user_id: str = "local",
+        on_text: Optional[Callable[[str], None]] = None,
+        context_channel: str = "",
+        context_user_id: str = "",
+    ) -> TurnResult:
         session = self.session_manager.get_or_create(agent.agent_id, channel=channel, user_id=user_id)
-        self.tool_registry.set_channel_context(channel, user_id, user_input, session.session_key, agent.agent_id)
+        scope_channel = context_channel or channel
+        scope_user_id = context_user_id or user_id
+        prompt_channel = scope_channel or channel
+        self.tool_registry.set_channel_context(scope_channel, scope_user_id, user_input, session.session_key, agent.agent_id)
         bootstrap_data = self.bootstrap_loader.load_all(mode=agent.prompt_mode)
         self.skills_catalog.discover()
         skills_block = self.skills_catalog.format_prompt_block()
@@ -500,10 +543,20 @@ class TurnProcessor:
             channel=channel,
             user_id=user_id,
         )
-        memory_context = self.build_memory_context(user_input, channel=channel, user_id=user_id, agent_id=agent.agent_id)
-        lessons_context = self.build_lessons_context(user_input, channel=channel, user_id=user_id, agent_id=agent.agent_id)
-        ops_context = self.build_ops_context(channel=channel, user_id=user_id, agent_id=agent.agent_id)
-        daily_digest_context = self.build_daily_digest_context(channel, user_id, agent.agent_id)
+        memory_context = self.build_memory_context(
+            user_input,
+            channel=scope_channel,
+            user_id=scope_user_id,
+            agent_id=agent.agent_id,
+        )
+        lessons_context = self.build_lessons_context(
+            user_input,
+            channel=scope_channel,
+            user_id=scope_user_id,
+            agent_id=agent.agent_id,
+        )
+        ops_context = self.build_ops_context(channel=scope_channel, user_id=scope_user_id, agent_id=agent.agent_id)
+        daily_digest_context = self.build_daily_digest_context(scope_channel, scope_user_id, agent.agent_id)
         system_prompt = self.prompt_builder.build(
             bootstrap=bootstrap_data,
             skills_block=skills_block,
@@ -514,12 +567,14 @@ class TurnProcessor:
             daily_digest_context=daily_digest_context,
             mode=agent.prompt_mode,
             agent_id=agent.agent_id,
-            channel=channel,
+            channel=prompt_channel,
         )
         self.session_manager.append(session.session_key, "user", user_input)
+        self.session_manager.sanitize_orphan_tool_results(session.session_key)
         tool_roundtrips = 0
         errors: list[str] = []
         full_text = ""
+        tool_state_recovery_attempted = False
         
         while True:
             try:
@@ -531,6 +586,17 @@ class TurnProcessor:
                 )
                 full_text += current_text
             except Exception as exc:
+                if self._is_invalid_tool_result_error(exc) and not tool_state_recovery_attempted:
+                    removed_orphans = self.session_manager.sanitize_orphan_tool_results(session.session_key)
+                    removed_protocol = 0
+                    if removed_orphans == 0:
+                        removed_protocol = self.session_manager.strip_tool_protocol_messages(session.session_key)
+                    if removed_orphans or removed_protocol:
+                        tool_state_recovery_attempted = True
+                        errors.append(
+                            f"auto-recovered malformed tool state: dropped {removed_orphans + removed_protocol} stale item(s)"
+                        )
+                        continue
                 errors.append(str(exc))
                 result = TurnResult(
                     agent_id=agent.agent_id,

@@ -1462,7 +1462,10 @@ class WeChatBotRunner:
         self._send_typing(user_id, context_token, status=1)
         try:
             for index, part in enumerate(parts):
-                self._client.send_text(self._account.token, user_id, part, context_token)
+                try:
+                    self._client.send_text(self._account.token, user_id, part, context_token)
+                except Exception:
+                    raise
                 if index < len(parts) - 1:
                     time.sleep(0.35)
         finally:

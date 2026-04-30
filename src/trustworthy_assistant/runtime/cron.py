@@ -158,6 +158,16 @@ class CronScheduler:
         if job is None:
             return False, f"unknown cron job: {job_id}"
         self._execute_job(job_id=job_id, scheduled_for=_now_utc(), manual=True)
+        with self._lock:
+            updated = self._jobs.get(job_id)
+        if updated is None:
+            return True, f"cron job triggered: {job_id}"
+        if updated.last_status == "error":
+            detail = updated.last_error or "unknown error"
+            return False, f"cron job failed: {job_id}\nerror: {detail}"
+        preview = (updated.last_result_preview or "").strip()
+        if preview:
+            return True, f"cron job triggered: {job_id}\npreview: {preview}"
         return True, f"cron job triggered: {job_id}"
 
     def add_dynamic_job(self, job_id: str, message: str, delay_minutes: int, channel: str = "", sender_id: str = "") -> None:
@@ -319,6 +329,8 @@ class CronScheduler:
                 agent=agent,
                 channel="cron",
                 user_id=job_id,
+                context_channel=job_channel,
+                context_user_id=job_sender_id,
             )
             preview = (result.assistant_text or "").strip().replace("\n", " ")
             if len(preview) > 120:
@@ -329,7 +341,7 @@ class CronScheduler:
                 return
             self._mark_result(job_id, status="ok", error="", preview=preview)
             self.on_event(f"job {job_id} completed")
-            if job_channel and job_sender_id and self.channel_sender:
+            if not manual and job_channel and job_sender_id and self.channel_sender:
                 try:
                     reply_text = (result.assistant_text or "").strip()
                     if reply_text:
