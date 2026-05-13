@@ -71,7 +71,7 @@ venv.bak/
 Thumbs.db
 
 # Project specific
-workspace/
-*.jsonl
+#workspace/
+# *.jsonl
 !workspace_template/**
 .wechat_personal/incoming/*

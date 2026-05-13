@@ -1,0 +1,32 @@
+{
+  "weekly-review": {
+    "last_run_at": "2026-04-24T10:00:49.293978+00:00",
+    "last_status": "ok",
+    "last_error": "",
+    "last_result_preview": "根据这周记录，给你整理一下：  ---  ## 本周主要事项  **1. 运动记录**（4月24日） - 跑步机跑步：12分47秒，消耗66 kcal，坡度8.5%  **2. 饮食记录** - 4/23 午餐：藜麦杂粮+培根+全麦吐..."
+  },
+  "daily-digest": {
+    "last_run_at": "2026-05-07T10:30:06.529567+00:00",
+    "last_status": "error",
+    "last_error": "Error code: 500 - {'type': 'error', 'error': {'type': 'api_error', 'message': 'your current token plan not support model, MiniMax-M2.7 (2061)'}, 'request_id': '064b9cae90851f5f64c21aff833a14f7'}",
+    "last_result_preview": ""
+  },
+  "morning-brief": {
+    "last_run_at": "2026-04-30T03:46:50.229487+00:00",
+    "last_status": "ok",
+    "last_error": "",
+    "last_result_preview": "## 《今日早报》  **4月30日 · 星期四**  ---  🌤️ **今日天气**  晴，12~24°C，北风4-5级，空气优。风有点大，发型预警⚠️  ---  📋 **今日待办**  - **胥心生日快乐！** 礼物是键盘，..."
+  },
+  "ledger-daily-wechat-o9cq808gfujuazeeomwxo-7ux-go-im-wechat": {
+    "last_run_at": "2026-05-06T15:49:54.397240+00:00",
+    "last_status": "error",
+    "last_error": "Error code: 500 - {'type': 'error', 'error': {'type': 'api_error', 'message': 'your current token plan not support model, MiniMax-M2.7 (2061)'}, 'request_id': '064a9622c66f518bcca19d602aade4c5'}",
+    "last_result_preview": ""
+  },
+  "dream-maintain-lessons": {
+    "last_run_at": "2026-04-29T21:40:05.553584+00:00",
+    "last_status": "ok",
+    "last_error": "",
+    "last_result_preview": "dream maintain scopes=1 decayed=0 archived=0"
+  }
+}

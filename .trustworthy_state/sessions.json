@@ -7,16 +7,6 @@
       "user_id": "o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat",
       "messages": [
         {
-          "role": "user",
-          "content": [
-            {
-              "type": "tool_result",
-              "tool_use_id": "call_function_3uhsgy0tv5p5_1",
-              "content": "(empty)"
-            }
-          ]
-        },
-        {
           "role": "assistant",
           "content": [
             {
@@ -1653,10 +1643,14 @@
               "content": "Supervisor: approved (read-only filesystem inspection)\nRisk: low\nCommand: cat /Users/bytedance/Documents/trae/trustworthy_assistant/workspace/CRON.json\nCWD: /Users/bytedance/Documents/trae/trustworthy_assistant/workspace\nExit code: 0\nSTDOUT:\n{\n  \"jobs\": [\n    {\n      \"id\": \"daily-digest\",\n      \"name\": \"Daily Digest\",\n      \"enabled\": true,\n      \"channel\": \"wechat\",\n      \"sender_id\": \"o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat\",\n      \"schedule\": {\n        \"kind\": \"cron\",\n        \"expr\": \"30 18 * * *\",\n        \"tz\": \"Local\"\n      },\n      \"payload\": {\n        \"kind\": \"agent_turn\",\n        \"message\": \"请直接输出一条适合微信阅读的每日消息，标题固定为《今日总结》。内容包括：1) 今天主要聊了什么 2) 完成了哪些任务 3) 有什么待办或未完成的事项。整体简洁、自然，不要解释过程。\"\n      },\n      \"delete_after_run\": false\n    },\n    {\n      \"id\": \"dream-main-wechat-o9cq808GfuJuaZeeOMWxO_7uX_go-im-wechat-2026-04-23\",\n      \"name\": \"Nightly Dream\",\n      \"enabled\": true,\n      \"schedule\": {\n        \"kind\": \"cron\",\n        \"expr\": \"4 3 24 4 *\",\n        \"tz\": \"Local\"\n      },\n      \"payload\": {\n        \"kind\": \"dream_run\",\n        \"plan_id\": \"dream_plan_f20a98b086d8\",\n        \"agent_id\": \"main\",\n        \"channel\": \"wechat\",\n        \"user_id\": \"o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat\",\n        \"target_date\": \"2026-04-23\",\n        \"tz\": \"Local\"\n      },\n      \"delete_after_run\": true\n    },\n    {\n      \"id\": \"dream-main-wechat-o9cq808GfuJuaZeeOMWxO_7uX_go-im-wechat-2026-04-24\",\n      \"name\": \"Nightly Dream\",\n      \"enabled\": true,\n      \"schedule\": {\n        \"kind\": \"cron\",\n        \"expr\": \"27 4 25 4 *\",\n        \"tz\": \"Local\"\n      },\n      \"payload\": {\n        \"kind\": \"dream_run\",\n        \"plan_id\": \"dream_plan_ef11f81ef6b1\",\n        \"agent_id\": \"main\",\n        \"channel\": \"wechat\",\n        \"user_id\": \"o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat\",\n        \"target_date\": \"2026-04-24\",\n        \"tz\": \"Local\"\n      },\n      \"delete_after_run\": true\n    },\n    {\n      \"id\": \"dream-main-wechat-o9cq808GfuJuaZeeOMWxO_7uX_go-im-wechat-2026-04-27\",\n      \"name\": \"Nightly Dream\",\n      \"enabled\": true,\n      \"schedule\": {\n        \"kind\": \"cron\",\n        \"expr\": \"48 5 28 4 *\",\n        \"tz\": \"Local\"\n      },\n      \"payload\": {\n        \"kind\": \"dream_run\",\n        \"plan_id\": \"dream_plan_38065f8b39ae\",\n        \"agent_id\": \"main\",\n        \"channel\": \"wechat\",\n        \"user_id\": \"o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat\",\n        \"target_date\": \"2026-04-27\",\n        \"tz\": \"Local\"\n      },\n      \"delete_after_run\": true\n    },\n    {\n      \"id\": \"dream-main-wechat-o9cq808GfuJuaZeeOMWxO_7uX_go-im-wechat-2026-04-28\",\n      \"name\": \"Nightly Dream\",\n      \"enabled\": true,\n      \"schedule\": {\n        \"kind\": \"cron\",\n        \"expr\": \"34 5 29 4 *\",\n        \"tz\": \"Local\"\n      },\n      \"payload\": {\n        \"kind\": \"dream_run\",\n        \"plan_id\": \"dream_plan_17685e9cdd4f\",\n        \"agent_id\": \"main\",\n        \"channel\": \"wechat\",\n        \"user_id\": \"o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat\",\n        \"target_date\": \"2026-04-28\",\n        \"tz\": \"Local\"\n      },\n      \"delete_after_run\": true\n    },\n    {\n      \"id\": \"dream-maintain-lessons\",\n      \"name\": \"Dream Lesson Maintenance\",\n      \"enabled\": true,\n      \"schedule\": {\n        \"kind\": \"cron\",\n        \"expr\": \"40 5 * * *\",\n        \"tz\": \"Local\"\n      },\n      \"payload\": {\n        \"kind\": \"dream_maintain\"\n      },\n      \"delete_after_run\": false\n    },\n    {\n      \"id\": \"ledger-daily-wechat-o9cq808gfujuazeeomwxo-7ux-go-im-wechat\",\n      \"name\": \"Daily Ledger Report\",\n      \"enabled\": true,\n      \"channel\": \"wechat\",\n      \"sender_id\": \"o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat\",\n      \"schedule\": {\n        \"kind\": \"cron\",\n        \"expr\": \"0 23 * * *\",\n        \"tz\": \"Local\"\n      },\n      \"payload\": {\n        \"kind\": \"agent_turn\",\n        \"message\": \"请调用 `ledger_report(period=\\\"today\\\")` 获取账本数据。生成今天的账本总结，包含总支出、总收入、净额、分类统计和简短结论。如果该周期没有任何账目，也请明确说明本周期暂无记账记录。\"\n      },\n      \"delete_after_run\": false\n    },\n    {\n      \"id\": \"ledger-monthly-wechat-o9cq808gfujuazeeomwxo-7ux-go-im-wechat\",\n      \"name\": \"Monthly Ledger Report\",\n      \"enabled\": true,\n      \"channel\": \"wechat\",\n      \"sender_id\": \"o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat\",\n      \"schedule\": {\n        \"kind\": \"cron\",\n        \"expr\": \"5 0 1 * *\",\n        \"tz\": \"Local\"\n      },\n      \"payload\": {\n  \n\n[... truncated, total 6384 chars ...]"
             }
           ]
+        },
+        {
+          "role": "user",
+          "content": "用户当前消息：你的 daily digest 咋了"
         }
       ],
       "created_at": "2026-04-29T09:50:41.857887+00:00",
-      "last_active_at": "2026-04-30T04:17:54.091698+00:00"
+      "last_active_at": "2026-05-07T11:15:21.337853+00:00"
     },
     {
       "session_key": "agent:main:cron:daily-digest",
@@ -1739,10 +1733,18 @@
               "type": "text"
             }
           ]
+        },
+        {
+          "role": "user",
+          "content": "请直接输出一条适合微信阅读的每日消息，标题固定为《今日总结》。内容包括：1) 今天主要聊了什么 2) 完成了哪些任务 3) 有什么待办或未完成的事项。整体简洁、自然，不要解释过程。"
+        },
+        {
+          "role": "user",
+          "content": "请直接输出一条适合微信阅读的每日消息，标题固定为《今日总结》。内容包括：1) 今天主要聊了什么 2) 完成了哪些任务 3) 有什么待办或未完成的事项。整体简洁、自然，不要解释过程。"
         }
       ],
       "created_at": "2026-04-29T10:30:12.452842+00:00",
-      "last_active_at": "2026-04-29T10:51:06.848314+00:00"
+      "last_active_at": "2026-05-07T10:30:04.349490+00:00"
     },
     {
       "session_key": "agent:main:cron:morning-brief",
@@ -1839,10 +1841,14 @@
         {
           "role": "user",
           "content": "请调用 `ledger_report(period=\"today\")` 获取账本数据。生成今天的账本总结，包含总支出、总收入、净额、分类统计和简短结论。如果该周期没有任何账目，也请明确说明本周期暂无记账记录。"
+        },
+        {
+          "role": "user",
+          "content": "请调用 `ledger_report(period=\"today\")` 获取账本数据。生成今天的账本总结，包含总支出、总收入、净额、分类统计和简短结论。如果该周期没有任何账目，也请明确说明本周期暂无记账记录。"
         }
       ],
       "created_at": "2026-04-29T15:00:01.345711+00:00",
-      "last_active_at": "2026-04-29T15:00:01.848544+00:00"
+      "last_active_at": "2026-05-06T15:01:44.468262+00:00"
     }
   ]
 }

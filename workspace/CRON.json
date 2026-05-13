@@ -1,0 +1,217 @@
+{
+  "jobs": [
+    {
+      "id": "daily-digest",
+      "name": "Daily Digest",
+      "enabled": true,
+      "channel": "wechat",
+      "sender_id": "o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat",
+      "schedule": {
+        "kind": "cron",
+        "expr": "30 18 * * *",
+        "tz": "Local"
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "请直接输出一条适合微信阅读的每日消息，标题固定为《今日总结》。内容包括：1) 今天主要聊了什么 2) 完成了哪些任务 3) 有什么待办或未完成的事项。整体简洁、自然，不要解释过程。"
+      },
+      "delete_after_run": false
+    },
+    {
+      "id": "dream-main-wechat-o9cq808GfuJuaZeeOMWxO_7uX_go-im-wechat-2026-04-23",
+      "name": "Nightly Dream",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "4 3 24 4 *",
+        "tz": "Local"
+      },
+      "payload": {
+        "kind": "dream_run",
+        "plan_id": "dream_plan_f20a98b086d8",
+        "agent_id": "main",
+        "channel": "wechat",
+        "user_id": "o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat",
+        "target_date": "2026-04-23",
+        "tz": "Local"
+      },
+      "delete_after_run": true
+    },
+    {
+      "id": "dream-main-wechat-o9cq808GfuJuaZeeOMWxO_7uX_go-im-wechat-2026-04-24",
+      "name": "Nightly Dream",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "27 4 25 4 *",
+        "tz": "Local"
+      },
+      "payload": {
+        "kind": "dream_run",
+        "plan_id": "dream_plan_ef11f81ef6b1",
+        "agent_id": "main",
+        "channel": "wechat",
+        "user_id": "o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat",
+        "target_date": "2026-04-24",
+        "tz": "Local"
+      },
+      "delete_after_run": true
+    },
+    {
+      "id": "dream-main-wechat-o9cq808GfuJuaZeeOMWxO_7uX_go-im-wechat-2026-04-27",
+      "name": "Nightly Dream",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "48 5 28 4 *",
+        "tz": "Local"
+      },
+      "payload": {
+        "kind": "dream_run",
+        "plan_id": "dream_plan_38065f8b39ae",
+        "agent_id": "main",
+        "channel": "wechat",
+        "user_id": "o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat",
+        "target_date": "2026-04-27",
+        "tz": "Local"
+      },
+      "delete_after_run": true
+    },
+    {
+      "id": "dream-main-wechat-o9cq808GfuJuaZeeOMWxO_7uX_go-im-wechat-2026-04-28",
+      "name": "Nightly Dream",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "34 5 29 4 *",
+        "tz": "Local"
+      },
+      "payload": {
+        "kind": "dream_run",
+        "plan_id": "dream_plan_17685e9cdd4f",
+        "agent_id": "main",
+        "channel": "wechat",
+        "user_id": "o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat",
+        "target_date": "2026-04-28",
+        "tz": "Local"
+      },
+      "delete_after_run": true
+    },
+    {
+      "id": "dream-maintain-lessons",
+      "name": "Dream Lesson Maintenance",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "expr": "40 5 * * *",
+        "tz": "Local"
+      },
+      "payload": {
+        "kind": "dream_maintain"
+      },
+      "delete_after_run": false
+    },
+    {
+      "id": "ledger-daily-wechat-o9cq808gfujuazeeomwxo-7ux-go-im-wechat",
+      "name": "Daily Ledger Report",
+      "enabled": true,
+      "channel": "wechat",
+      "sender_id": "o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat",
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 23 * * *",
+        "tz": "Local"
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "请调用 `ledger_report(period=\"today\")` 获取账本数据。生成今天的账本总结，包含总支出、总收入、净额、分类统计和简短结论。如果该周期没有任何账目，也请明确说明本周期暂无记账记录。"
+      },
+      "delete_after_run": false
+    },
+    {
+      "id": "ledger-monthly-wechat-o9cq808gfujuazeeomwxo-7ux-go-im-wechat",
+      "name": "Monthly Ledger Report",
+      "enabled": true,
+      "channel": "wechat",
+      "sender_id": "o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat",
+      "schedule": {
+        "kind": "cron",
+        "expr": "5 0 1 * *",
+        "tz": "Local"
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "请调用 `ledger_report(period=\"last_month\")` 获取账本数据。生成上个月账单总结，包含总支出、总收入、净额、分类统计、主要消费项目和简短建议。如果该周期没有任何账目，也请明确说明本周期暂无记账记录。"
+      },
+      "delete_after_run": false
+    },
+    {
+      "id": "ledger-weekly-wechat-o9cq808gfujuazeeomwxo-7ux-go-im-wechat",
+      "name": "Weekly Ledger Report",
+      "enabled": true,
+      "channel": "wechat",
+      "sender_id": "o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat",
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 23 * * 0",
+        "tz": "Local"
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "请调用 `ledger_report(period=\"week\")` 获取账本数据。生成本周账本总结，包含总支出、总收入、净额、分类统计、本周高频消费和简短建议。如果该周期没有任何账目，也请明确说明本周期暂无记账记录。"
+      },
+      "delete_after_run": false
+    },
+    {
+      "id": "morning-brief",
+      "name": "Morning Brief",
+      "enabled": true,
+      "channel": "wechat",
+      "sender_id": "o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat",
+      "schedule": {
+        "kind": "cron",
+        "expr": "30 11 * * *",
+        "tz": "Local"
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "请直接输出一条适合微信阅读的每日消息，标题固定为《今日早报》。内容包含三部分：1) 今日天气/概况 2) 今日待办或提醒事项 3) 随机内容：算法/系统设计面经题，或孙燕姿相关分享。整体简洁轻松，不要解释过程。"
+      },
+      "delete_after_run": false
+    },
+    {
+      "id": "morning-briefing",
+      "name": "Morning Briefing",
+      "enabled": false,
+      "channel": "wechat",
+      "sender_id": "o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat",
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 9 * * *",
+        "tz": "Local"
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "Please output a WeChat-friendly message with the fixed title 'Morning Briefing'. Include today's weather/overview, reminders or pending items, and a short concise summary. Do not explain the process."
+      },
+      "delete_after_run": false
+    },
+    {
+      "id": "weekly-review",
+      "name": "Weekly Review",
+      "enabled": true,
+      "channel": "wechat",
+      "sender_id": "o9cq808GfuJuaZeeOMWxO_7uX_go@im.wechat",
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 18 * * 5",
+        "tz": "Local"
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "请直接输出一条适合微信阅读的每周消息，标题固定为《本周回顾》。内容包括：1) 本周主要做了什么 2) 关键进展或成果 3) 下周待跟进事项。整体简洁清楚，不要解释过程。"
+      },
+      "delete_after_run": false
+    }
+  ]
+}
